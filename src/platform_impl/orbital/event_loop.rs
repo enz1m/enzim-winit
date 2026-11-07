@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -267,7 +268,7 @@ impl EventState {
         pressed_mods
             .set(ModifiersKeys::RSUPER, self.keyboard.contains(KeyboardModifierState::RSUPER));
 
-        Modifiers { state, pressed_mods }
+        Modifiers { state, pressed_mods, caps_lock: false }
     }
 }
 

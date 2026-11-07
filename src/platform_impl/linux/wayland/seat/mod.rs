@@ -60,6 +60,9 @@ pub struct WinitSeatState {
     /// The current modifiers state on the seat.
     modifiers: ModifiersState,
 
+    /// Whether Caps Lock is on on the seat.
+    caps_lock: bool,
+
     /// Whether we have pending modifiers.
     modifiers_pending: bool,
 }
@@ -67,6 +70,13 @@ pub struct WinitSeatState {
 impl WinitSeatState {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// The seat's modifiers as a window event reports them.
+    fn event_modifiers(&self) -> crate::event::Modifiers {
+        let mut modifiers = crate::event::Modifiers::from(self.modifiers);
+        modifiers.caps_lock = self.caps_lock;
+        modifiers
     }
 }
 

@@ -92,7 +92,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                 // HACK: this is just for GNOME not fixing their ordering issue of modifiers.
                 if std::mem::take(&mut seat_state.modifiers_pending) {
                     state.events_sink.push_window_event(
-                        WindowEvent::ModifiersChanged(seat_state.modifiers.into()),
+                        WindowEvent::ModifiersChanged(seat_state.event_modifiers()),
                         window_id,
                     );
                 }
@@ -245,6 +245,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
 
                 xkb_state.update_modifiers(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                 seat_state.modifiers = xkb_state.modifiers().into();
+                seat_state.caps_lock = xkb_state.modifiers().caps_lock;
 
                 // HACK: part of the workaround from `WlKeyboardEvent::Enter`.
                 let window_id = match *data.window_id.lock().unwrap() {
@@ -256,7 +257,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                 };
 
                 state.events_sink.push_window_event(
-                    WindowEvent::ModifiersChanged(seat_state.modifiers.into()),
+                    WindowEvent::ModifiersChanged(seat_state.event_modifiers()),
                     window_id,
                 );
             },

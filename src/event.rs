@@ -707,12 +707,25 @@ pub struct Modifiers {
     //
     // The field providing a metadata, it shouldn't be used as a source of truth.
     pub(crate) pressed_mods: ModifiersKeys,
+
+    /// Whether Caps Lock is on.
+    pub(crate) caps_lock: bool,
 }
 
 impl Modifiers {
     /// The state of the modifiers.
     pub fn state(&self) -> ModifiersState {
         self.state
+    }
+
+    /// Whether Caps Lock is on (locked or latched), apart from the modifier
+    /// keys held: a password field warns about it.
+    ///
+    /// ## Platform-specific
+    ///
+    /// Reported on Wayland and X11; always `false` elsewhere.
+    pub fn caps_lock(&self) -> bool {
+        self.caps_lock
     }
 
     /// The state of the left shift key.
@@ -766,7 +779,7 @@ impl Modifiers {
 
 impl From<ModifiersState> for Modifiers {
     fn from(value: ModifiersState) -> Self {
-        Self { state: value, pressed_mods: Default::default() }
+        Self { state: value, pressed_mods: Default::default(), caps_lock: false }
     }
 }
 

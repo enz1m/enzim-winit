@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
@@ -328,6 +329,7 @@ impl<T: 'static> EventLoop<T> {
             first_touch: None,
             active_window: None,
             modifiers: Default::default(),
+            caps_lock: Default::default(),
             is_composing: false,
         };
 

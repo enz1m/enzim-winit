@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::{c_char, c_int, c_long, c_ulong};
@@ -66,6 +67,8 @@ pub struct EventProcessor {
     pub active_window: Option<xproto::Window>,
     /// Latest modifiers we've sent for the user to trigger change in event.
     pub modifiers: Cell<ModifiersState>,
+    /// Whether Caps Lock is on, beside `modifiers`.
+    pub caps_lock: Cell<bool>,
     // Track modifiers based on keycodes. NOTE: that serials generally don't work for tracking
     // since they are not unique and could be duplicated in case of sequence of key events is
     // delivered at near the same time.
@@ -983,7 +986,7 @@ impl EventProcessor {
 
             // Restore the client's modifiers state after replay.
             if replay {
-                self.send_modifiers(window_id, self.modifiers.get(), true, &mut callback);
+                self.send_modifiers(window_id, self.current_modifiers(), true, &mut callback);
             }
 
             return;
@@ -1036,10 +1039,9 @@ impl EventProcessor {
 
         let mask = self.xkb_mod_mask_from_core(state);
         xkb_state.update_modifiers(mask, 0, 0, 0, 0, Self::core_keyboard_group(state));
-        let mods: ModifiersState = xkb_state.modifiers().into();
+        let mods: crate::event::Modifiers = xkb_state.modifiers().into();
 
-        let event =
-            Event::WindowEvent { window_id, event: WindowEvent::ModifiersChanged(mods.into()) };
+        let event = Event::WindowEvent { window_id, event: WindowEvent::ModifiersChanged(mods) };
 
         callback(&self.target, event);
     }
@@ -1762,19 +1764,28 @@ impl EventProcessor {
     ///
     /// The event won't be sent when the `modifiers` match the previously `sent` modifiers value,
     /// unless `force` is passed. The `force` should be passed when the active window changes.
+    /// The modifiers last sent, with Caps Lock.
+    fn current_modifiers(&self) -> crate::event::Modifiers {
+        let mut modifiers = crate::event::Modifiers::from(self.modifiers.get());
+        modifiers.caps_lock = self.caps_lock.get();
+        modifiers
+    }
+
     fn send_modifiers<T: 'static, F: FnMut(&RootAEL, Event<T>)>(
         &self,
         window_id: crate::window::WindowId,
-        modifiers: ModifiersState,
+        modifiers: crate::event::Modifiers,
         force: bool,
         callback: &mut F,
     ) {
         // NOTE: Always update the modifiers to account for case when they've changed
         // and forced was `true`.
-        if self.modifiers.replace(modifiers) != modifiers || force {
+        let state_changed = self.modifiers.replace(modifiers.state()) != modifiers.state();
+        let caps_changed = self.caps_lock.replace(modifiers.caps_lock()) != modifiers.caps_lock();
+        if state_changed || caps_changed || force {
             let event = Event::WindowEvent {
                 window_id,
-                event: WindowEvent::ModifiersChanged(self.modifiers.get().into()),
+                event: WindowEvent::ModifiersChanged(self.current_modifiers()),
             };
             callback(&self.target, event);
         }

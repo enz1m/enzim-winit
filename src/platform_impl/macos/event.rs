@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 use std::ffi::c_void;
 
 use core_foundation::base::CFRelease;
@@ -323,7 +324,7 @@ pub(super) fn event_mods(event: &NSEvent) -> Modifiers {
     pressed_mods.set(ModifiersKeys::LSUPER, flags.contains(NX_DEVICELCMDKEYMASK));
     pressed_mods.set(ModifiersKeys::RSUPER, flags.contains(NX_DEVICERCMDKEYMASK));
 
-    Modifiers { state, pressed_mods }
+    Modifiers { state, pressed_mods, caps_lock: false }
 }
 
 pub(super) fn dummy_event() -> Option<Retained<NSEvent>> {

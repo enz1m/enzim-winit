@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! XKB state.
 
 use std::os::raw::c_char;
@@ -175,6 +176,14 @@ pub struct ModifiersState {
     pub logo: bool,
     /// The "Num lock" key
     pub num_lock: bool,
+}
+
+impl From<ModifiersState> for crate::event::Modifiers {
+    fn from(mods: ModifiersState) -> crate::event::Modifiers {
+        let mut modifiers = crate::event::Modifiers::from(crate::keyboard::ModifiersState::from(mods));
+        modifiers.caps_lock = mods.caps_lock;
+        modifiers
+    }
 }
 
 impl From<ModifiersState> for crate::keyboard::ModifiersState {
