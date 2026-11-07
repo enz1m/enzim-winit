@@ -25,6 +25,7 @@ mod pointer;
 mod text_input;
 mod touch;
 
+pub use pointer::gestures::{PointerGesturesState, SeatGestures};
 pub use pointer::relative_pointer::RelativePointerState;
 pub use pointer::{PointerConstraintsState, WinitPointerData, WinitPointerDataExt};
 pub use text_input::{TextInputState, ZwpTextInputV3Ext};
@@ -49,6 +50,9 @@ pub struct WinitSeatState {
 
     /// The relative pointer bound on the seat.
     relative_pointer: Option<ZwpRelativePointerV1>,
+
+    /// The touchpad gestures of the seat's pointer.
+    gestures: Option<SeatGestures>,
 
     /// The keyboard bound on the seat.
     keyboard_state: Option<KeyboardState>,
@@ -123,6 +127,11 @@ impl SeatHandler for WinitState {
                     )
                 });
 
+                seat_state.gestures = self
+                    .pointer_gestures
+                    .as_ref()
+                    .map(|manager| manager.gestures(themed_pointer.pointer(), queue_handle));
+
                 let themed_pointer = Arc::new(themed_pointer);
 
                 // Register cursor surface.
@@ -175,6 +184,7 @@ impl SeatHandler for WinitState {
                 if let Some(relative_pointer) = seat_state.relative_pointer.take() {
                     relative_pointer.destroy();
                 }
+                seat_state.gestures = None;
 
                 if let Some(pointer) = seat_state.pointer.take() {
                     let pointer_data = pointer.pointer().winit_data();

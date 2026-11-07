@@ -28,8 +28,8 @@ use sctk::subcompositor::SubcompositorState;
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::output::MonitorHandle;
 use crate::platform_impl::wayland::seat::{
-    PointerConstraintsState, RelativePointerState, TextInputState, WinitPointerData,
-    WinitPointerDataExt, WinitSeatState,
+    PointerConstraintsState, PointerGesturesState, RelativePointerState, TextInputState,
+    WinitPointerData, WinitPointerDataExt, WinitSeatState,
 };
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
 use crate::platform_impl::wayland::types::wp_fractional_scaling::FractionalScalingManager;
@@ -104,6 +104,9 @@ pub struct WinitState {
 
     /// Relative pointer.
     pub relative_pointer: Option<RelativePointerState>,
+
+    /// The touchpad gestures global, when the compositor offers it.
+    pub pointer_gestures: Option<PointerGesturesState>,
 
     /// Pointer constraints to handle pointer locking and confining.
     pub pointer_constraints: Option<Arc<PointerConstraintsState>>,
@@ -192,6 +195,7 @@ impl WinitState {
             text_input_state: TextInputState::new(globals, queue_handle).ok(),
 
             relative_pointer: RelativePointerState::new(globals, queue_handle).ok(),
+            pointer_gestures: PointerGesturesState::new(globals, queue_handle).ok(),
             pointer_constraints: PointerConstraintsState::new(globals, queue_handle)
                 .map(Arc::new)
                 .ok(),
