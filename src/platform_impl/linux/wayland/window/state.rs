@@ -1,6 +1,8 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The state of the window, which is shared with the event-loop.
 
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -51,10 +53,22 @@ pub type WinitFrame = sctk::shell::xdg::fallback_frame::FallbackFrame<WinitState
 // Minimum window inner size.
 const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
 
+/// Mints one identity per `wl_surface` this backend creates.
+static NEXT_SURFACE_INCARNATION: AtomicU64 = AtomicU64::new(1);
+
 /// The state of the window which is being updated from the [`WinitState`].
 pub struct WindowState {
     /// The connection to Wayland server.
     pub connection: Connection,
+
+    /// Identity of the `wl_surface` this state was built around.
+    ///
+    /// Minted where the surface is created, so it names that protocol object
+    /// rather than the window or a reusable object id. A surface the server
+    /// destroyed cannot be confused with a later one that reuses its numeric
+    /// id, which is what an exported xdg-foreign handle must be able to tell
+    /// apart while a portal request is outstanding.
+    surface_incarnation: u64,
 
     // A shared pool where to allocate custom cursors.
     custom_cursor_pool: Arc<Mutex<SlotPool>>,
@@ -184,6 +198,7 @@ impl WindowState {
             blur_manager: winit_state.kwin_blur_manager.clone(),
             compositor,
             connection,
+            surface_incarnation: NEXT_SURFACE_INCARNATION.fetch_add(1, Ordering::Relaxed),
             csd_fails: false,
             cursor_grab_mode: GrabState::new(),
             selected_cursor: Default::default(),
@@ -722,6 +737,11 @@ impl WindowState {
     #[inline]
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+
+    /// Identity of the `wl_surface` this state owns.
+    pub fn surface_incarnation(&self) -> u64 {
+        self.surface_incarnation
     }
 
     /// Set the cursor icon.

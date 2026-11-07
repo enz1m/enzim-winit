@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The Wayland window.
 
 use std::ffi::c_void;
@@ -7,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use sctk::reexports::client::protocol::wl_display::WlDisplay;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
-use sctk::reexports::client::{Proxy, QueueHandle};
+use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 
 use sctk::compositor::{CompositorState, Region, SurfaceData};
 use sctk::reexports::protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
@@ -631,6 +632,33 @@ impl Window {
     #[inline]
     pub fn surface(&self) -> &WlSurface {
         self.window.wl_surface()
+    }
+
+    /// The connection this window's surface was created on.
+    #[inline]
+    pub fn connection(&self) -> Connection {
+        self.window_state.lock().unwrap().connection.clone()
+    }
+
+    /// Identity of this window's `wl_surface`.
+    #[inline]
+    pub fn surface_incarnation(&self) -> u64 {
+        self.window_state.lock().unwrap().surface_incarnation()
+    }
+
+    /// The objects an XDG portal parent export needs: this window's own
+    /// connection, its surface, and that surface's identity.
+    ///
+    /// The surface is created once, in [`Window::new`], and no path replaces
+    /// it, so these three describe one protocol object for as long as the
+    /// window lives.
+    pub(crate) fn wayland_parent_objects(&self) -> (Connection, WlSurface, u64) {
+        let state = self.window_state.lock().unwrap();
+        (
+            state.connection.clone(),
+            self.window.wl_surface().clone(),
+            state.surface_incarnation(),
+        )
     }
 
     #[inline]

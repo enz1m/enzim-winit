@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! # Wayland
 //!
 //! **Note:** Windows don't appear on Wayland until you draw/present to them.
@@ -75,12 +76,35 @@ impl<T> EventLoopBuilderExtWayland for EventLoopBuilder<T> {
     }
 }
 
+/// The objects an XDG portal parent export needs from a Wayland window: the
+/// connection the window's surface lives on, that surface, and the surface's
+/// identity.
+///
+/// The identity is minted where the surface is created, so it names one
+/// protocol object and cannot be satisfied by a later surface that reuses the
+/// same numeric object id.
+pub type WaylandParentObjects = (
+    crate::platform_impl::wayland::Connection,
+    crate::platform_impl::wayland::WlSurface,
+    u64,
+);
+
 /// Additional methods on [`Window`] that are specific to Wayland.
 ///
 /// [`Window`]: crate::window::Window
 pub trait WindowExtWayland {
     /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
+
+    /// The window's own connection, surface and surface identity, for an XDG
+    /// portal parent export; `None` for a window that is not Wayland.
+    ///
+    /// These are the window's existing proxies, cloned. Nothing is rebuilt
+    /// from a raw pointer and no second connection is opened, so requests made
+    /// with them are requests on the window's own objects. The window remains
+    /// their owner: destroying it destroys the surface, and this method is the
+    /// only way to reach them, so no caller can outlive that.
+    fn wayland_parent_objects(&self) -> Option<WaylandParentObjects>;
 }
 
 impl WindowExtWayland for Window {
@@ -93,6 +117,10 @@ impl WindowExtWayland for Window {
             #[cfg(wayland_platform)]
             crate::platform_impl::Window::Wayland(window) => window.xdg_toplevel(),
         }
+    }
+
+    fn wayland_parent_objects(&self) -> Option<WaylandParentObjects> {
+        self.window.wayland_parent_objects()
     }
 }
 

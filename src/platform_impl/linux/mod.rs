@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 #![cfg(free_unix)]
 
 #[cfg(all(not(x11_platform), not(wayland_platform)))]
@@ -315,6 +316,17 @@ impl Window {
     #[inline]
     pub fn id(&self) -> WindowId {
         x11_or_wayland!(match self; Window(w) => w.id())
+    }
+
+    #[cfg(wayland_platform)]
+    pub(crate) fn wayland_parent_objects(
+        &self,
+    ) -> Option<(wayland::Connection, wayland::WlSurface, u64)> {
+        match self {
+            #[cfg(x11_platform)]
+            Window::X(_) => None,
+            Window::Wayland(window) => Some(window.wayland_parent_objects()),
+        }
     }
 
     #[inline]

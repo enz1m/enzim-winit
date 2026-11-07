@@ -1,11 +1,13 @@
+// Modified by enzUI contributors. See FORK.md.
 //! Winit's Wayland backend.
 
 use std::fmt::Display;
 use std::sync::Arc;
 
 use sctk::reexports::client::globals::{BindError, GlobalError};
-use sctk::reexports::client::protocol::wl_surface::WlSurface;
-use sctk::reexports::client::{ConnectError, DispatchError, Proxy};
+pub(crate) use sctk::reexports::client::Connection;
+pub(crate) use sctk::reexports::client::protocol::wl_surface::WlSurface;
+use sctk::reexports::client::{self, ConnectError, DispatchError, Proxy};
 
 pub(super) use crate::cursor::OnlyCursorImage as CustomCursor;
 use crate::dpi::{LogicalSize, PhysicalSize};
