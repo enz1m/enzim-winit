@@ -76,6 +76,8 @@ pub struct PlatformSpecificWindowAttributes {
     pub activation_token: Option<ActivationToken>,
     #[cfg(wayland_platform)]
     pub popup: Option<crate::platform::wayland::PopupAttributes>,
+    /// The window this one is a transient dialog of, and whether it is modal.
+    pub transient_parent: Option<(crate::window::WindowId, bool)>,
     #[cfg(x11_platform)]
     pub x11: X11WindowAttributes,
 }
@@ -101,6 +103,7 @@ impl Default for PlatformSpecificWindowAttributes {
             activation_token: None,
             #[cfg(wayland_platform)]
             popup: None,
+            transient_parent: None,
             #[cfg(x11_platform)]
             x11: X11WindowAttributes {
                 visual_id: None,

@@ -159,6 +159,13 @@ pub trait WindowAttributesExtWayland {
     /// [`WindowEvent::CloseRequested`](crate::event::WindowEvent::CloseRequested)
     /// means the compositor dismissed it. Ignored on X11.
     fn with_popup(self, popup: PopupAttributes) -> Self;
+
+    /// Build the window as a dialog of `parent`: `xdg_toplevel.set_parent`,
+    /// so the compositor keeps it above the parent and treats them as one
+    /// application window, and, when the compositor offers
+    /// `xdg_wm_dialog_v1`, a dialog marked modal or not. A modal dialog
+    /// blocks the parent for the compositor.
+    fn with_transient_parent(self, parent: crate::window::WindowId, modal: bool) -> Self;
 }
 
 impl WindowAttributesExtWayland for WindowAttributes {
@@ -172,6 +179,12 @@ impl WindowAttributesExtWayland for WindowAttributes {
     #[inline]
     fn with_popup(mut self, popup: PopupAttributes) -> Self {
         self.platform_specific.popup = Some(popup);
+        self
+    }
+
+    #[inline]
+    fn with_transient_parent(mut self, parent: crate::window::WindowId, modal: bool) -> Self {
+        self.platform_specific.transient_parent = Some((parent, modal));
         self
     }
 }

@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! Collects every atom used by the platform implementation.
 
 use core::ops::Index;
@@ -55,6 +56,7 @@ atom_manager! {
     _NET_WM_STATE_HIDDEN,
     _NET_WM_STATE_MAXIMIZED_HORZ,
     _NET_WM_STATE_MAXIMIZED_VERT,
+    _NET_WM_STATE_MODAL,
     _NET_WM_WINDOW_TYPE,
 
     // Activation atoms.

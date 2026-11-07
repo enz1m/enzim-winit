@@ -35,6 +35,7 @@ use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
 use crate::platform_impl::wayland::types::wp_fractional_scaling::FractionalScalingManager;
 use crate::platform_impl::wayland::types::wp_viewporter::ViewporterState;
 use crate::platform_impl::wayland::types::xdg_activation::XdgActivationState;
+use crate::platform_impl::wayland::types::xdg_dialog::DialogManager;
 use crate::platform_impl::wayland::types::xdg_toplevel_tag::ToplevelTagManager;
 use crate::platform_impl::wayland::window::{WindowRequests, WindowState};
 use crate::platform_impl::wayland::{WaylandError, WindowId};
@@ -97,6 +98,9 @@ pub struct WinitState {
     /// Xdg activation.
     pub xdg_activation: Option<XdgActivationState>,
     pub toplevel_tag_manager: Option<ToplevelTagManager>,
+
+    /// The `xdg_wm_dialog_v1` global, when the compositor offers it.
+    pub dialog_manager: Option<DialogManager>,
 
     /// Relative pointer.
     pub relative_pointer: Option<RelativePointerState>,
@@ -174,6 +178,7 @@ impl WinitState {
             xdg_shell: XdgShell::bind(globals, queue_handle).map_err(WaylandError::Bind)?,
             xdg_activation: XdgActivationState::bind(globals, queue_handle).ok(),
             toplevel_tag_manager: ToplevelTagManager::bind(globals, queue_handle).ok(),
+            dialog_manager: DialogManager::bind(globals, queue_handle).ok(),
 
             windows: Default::default(),
             window_requests: Default::default(),

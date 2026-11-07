@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! # X11
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -164,6 +165,11 @@ pub trait WindowAttributesExtX11 {
     /// Build window with `_NET_WM_WINDOW_TYPE` hints; defaults to `Normal`.
     fn with_x11_window_type(self, x11_window_type: Vec<WindowType>) -> Self;
 
+    /// Build the window as a dialog of `parent`: `WM_TRANSIENT_FOR`, the
+    /// `Dialog` window type unless other types were set, and
+    /// `_NET_WM_STATE_MODAL` when `modal`.
+    fn with_transient_parent(self, parent: crate::window::WindowId, modal: bool) -> Self;
+
     /// Build window with base size hint.
     ///
     /// ```
@@ -224,6 +230,12 @@ impl WindowAttributesExtX11 for WindowAttributes {
     #[inline]
     fn with_x11_window_type(mut self, x11_window_types: Vec<WindowType>) -> Self {
         self.platform_specific.x11.x11_window_types = x11_window_types;
+        self
+    }
+
+    #[inline]
+    fn with_transient_parent(mut self, parent: crate::window::WindowId, modal: bool) -> Self {
+        self.platform_specific.transient_parent = Some((parent, modal));
         self
     }
 

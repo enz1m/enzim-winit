@@ -36,6 +36,7 @@ use super::event_loop::sink::EventSink;
 use super::output::MonitorHandle;
 use super::state::WinitState;
 use super::types::xdg_activation::{PendingActivationRequests, XdgActivationTokenData};
+use super::types::xdg_dialog::Dialog;
 use super::types::xdg_toplevel_tag::ToplevelTagManager;
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
@@ -47,6 +48,10 @@ const ACTIVATION_SERIAL_LIFETIME: Duration = Duration::from_secs(1);
 
 /// The Wayland window.
 pub struct Window {
+    /// The `xdg_dialog_v1` of a transient dialog; declared first so it is
+    /// destroyed before the toplevel.
+    _dialog: Option<Dialog>,
+
     /// Reference to the underlying SCTK toplevel or popup.
     window: ShellSurface,
 
@@ -150,6 +155,22 @@ impl Window {
             },
         };
         let is_popup = popup.is_some();
+
+        // A transient dialog: keep it with its parent, and say whether it is
+        // modal where the compositor understands dialogs.
+        let dialog = match (attributes.platform_specific.transient_parent, window.toplevel()) {
+            (Some((parent, modal)), Some(toplevel)) => {
+                if let Some(parent) = state.windows.get_mut().get(&parent.0) {
+                    let parent = parent.lock().unwrap();
+                    toplevel.set_parent(parent.window.toplevel());
+                }
+                state
+                    .dialog_manager
+                    .as_ref()
+                    .map(|manager| manager.dialog(toplevel.xdg_toplevel(), modal, &queue_handle))
+            },
+            _ => None,
+        };
 
         let mut window_state = WindowState::new(
             event_loop_window_target.connection.clone(),
@@ -265,6 +286,7 @@ impl Window {
         event_loop_awakener.ping();
 
         Ok(Self {
+            _dialog: dialog,
             window,
             display,
             monitors,
