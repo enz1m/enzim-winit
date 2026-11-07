@@ -205,6 +205,12 @@ pub struct WindowState {
     /// A popup received its first configure.
     popup_configured: bool,
 
+    /// For a popup: its parent window and whether it took an input grab.
+    pub popup_of: Option<(super::WindowId, bool)>,
+
+    /// A popup's `xdg_popup` was destroyed ahead of the event loop's cleanup.
+    pub popup_destroyed: bool,
+
     /// The application draws the decorations when the compositor does not.
     pub app_drawn_decorations: bool,
 
@@ -251,6 +257,8 @@ impl WindowState {
             surface_incarnation: NEXT_SURFACE_INCARNATION.fetch_add(1, Ordering::Relaxed),
             csd_fails: false,
             popup_configured: false,
+            popup_of: None,
+            popup_destroyed: false,
             app_drawn_decorations: false,
             reported_decorations: None,
             cursor_grab_mode: GrabState::new(),
@@ -722,9 +730,27 @@ impl WindowState {
         Some(event)
     }
 
-    /// The latest pointer press on this window, without consuming it.
-    pub fn latest_input_serial(&self) -> Option<(u32, WlSeat)> {
-        self.activation_serial.pending.as_ref().map(|(serial, seat, _)| (*serial, seat.clone()))
+    /// The latest press or key on this window, if it is at most `max_age`
+    /// old, without consuming it.
+    pub fn recent_input_serial(&self, max_age: Duration) -> Option<(u32, WlSeat)> {
+        let (serial, seat, recorded_at) = self.activation_serial.pending.as_ref()?;
+        Instant::now()
+            .checked_duration_since(*recorded_at)
+            .is_some_and(|age| age <= max_age)
+            .then(|| (*serial, seat.clone()))
+    }
+
+    /// Destroys this popup's `xdg_popup` now, unmapping it, rather than when
+    /// the event loop next drops the window: a popup that replaces it may not
+    /// be created while this one still holds a grab.
+    pub fn destroy_popup_now(&mut self) {
+        if self.popup_destroyed {
+            return;
+        }
+        if let ShellSurface::Popup(popup) = &self.window {
+            popup.xdg_popup().destroy();
+            self.popup_destroyed = true;
+        }
     }
 
     /// Applies an `xdg_popup` configure: the size the compositor gave the

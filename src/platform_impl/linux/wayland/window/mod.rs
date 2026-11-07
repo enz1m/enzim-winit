@@ -130,6 +130,7 @@ impl Window {
         };
 
         let popup = attributes.platform_specific.popup;
+        let mut popup_of = None;
         let window = match popup {
             None => ShellSurface::Toplevel(state.xdg_shell.create_window(
                 surface.clone(),
@@ -137,9 +138,20 @@ impl Window {
                 &queue_handle,
             )),
             Some(popup) => {
+                // A replaced popup is destroyed first: a grab is only allowed
+                // from the topmost popup (or the toplevel without one), and a
+                // dropped window lives on until the event loop cleans up.
+                let popup_parent = popup.parent.0;
+                destroy_dropped_popups(&mut state);
+                let sibling_grabs = state.windows.get_mut().values().any(|window| {
+                    let window = window.lock().unwrap();
+                    !window.popup_destroyed
+                        && matches!(window.popup_of, Some((parent, true)) if parent == popup.parent.0)
+                });
                 let parent = state.windows.get_mut().get(&popup.parent.0).map(|parent| {
                     let parent = parent.lock().unwrap();
-                    let grab = popup.grab.then(|| parent_serial(&parent)).flatten();
+                    let grab =
+                        (popup.grab && !sibling_grabs).then(|| parent_serial(&parent)).flatten();
                     (parent.window.xdg_surface().clone(), grab)
                 });
                 let Some((parent, grab)) = parent else {
@@ -157,9 +169,10 @@ impl Window {
                     &state.xdg_shell,
                 )
                 .map_err(|_| os_error!(OsError::Misc("the compositor has no xdg_wm_base")))?;
-                if let Some((serial, seat)) = grab {
-                    popup.xdg_popup().grab(&seat, serial);
+                if let Some((serial, seat)) = &grab {
+                    popup.xdg_popup().grab(seat, *serial);
                 }
+                popup_of = Some((popup_parent, grab.is_some()));
                 ShellSurface::Popup(popup)
             },
         };
@@ -191,6 +204,7 @@ impl Window {
         );
 
         window_state.app_drawn_decorations = attributes.platform_specific.app_drawn_decorations;
+        window_state.popup_of = popup_of;
 
         // Set transparency hint.
         window_state.set_transparent(attributes.transparent);
@@ -971,11 +985,32 @@ impl TryFrom<&str> for Theme {
     }
 }
 
-/// The latest press on the parent, for an explicit popup grab.
+/// How old a press or key may be to open a grabbing popup: the menu it
+/// opens is created within a frame or two.
+const POPUP_GRAB_SERIAL_LIFETIME: Duration = Duration::from_secs(1);
+
+/// The latest recent press or key on the parent, for an explicit popup grab.
 fn parent_serial(
     parent: &WindowState,
 ) -> Option<(u32, sctk::reexports::client::protocol::wl_seat::WlSeat)> {
-    parent.latest_input_serial()
+    parent.recent_input_serial(POPUP_GRAB_SERIAL_LIFETIME)
+}
+
+/// Destroys the `xdg_popup` of every popup whose `Window` was dropped but
+/// which the event loop has not cleaned up yet. The window entries stay for
+/// the event loop, which reports them destroyed as before.
+fn destroy_dropped_popups(state: &mut WinitState) {
+    let requests = state.window_requests.get_mut();
+    for (id, window) in state.windows.get_mut().iter() {
+        let dropped =
+            requests.get(id).is_some_and(|request| request.closed.load(Ordering::Relaxed));
+        if dropped {
+            let mut window = window.lock().unwrap();
+            if window.popup_of.is_some() {
+                window.destroy_popup_now();
+            }
+        }
+    }
 }
 
 /// An `xdg_positioner` for `popup`.
