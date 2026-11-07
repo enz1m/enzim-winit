@@ -163,6 +163,10 @@ pub struct WindowState {
     /// The text inputs observed on the window.
     text_inputs: Vec<ZwpTextInputV3>,
 
+    /// The text around the IME cursor (text, cursor, anchor), sent with each
+    /// enable.
+    ime_surrounding: Option<(String, i32, i32)>,
+
     /// The inner size of the window, as in without client side decorations.
     size: LogicalSize<u32>,
 
@@ -315,6 +319,7 @@ impl WindowState {
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
             text_inputs: Vec::new(),
+            ime_surrounding: None,
             theme,
             title: String::default(),
             transparent: false,
@@ -1294,6 +1299,7 @@ impl WindowState {
             if allowed {
                 text_input.enable();
                 text_input.set_content_type_by_purpose(self.ime_purpose);
+                self.send_ime_surrounding(text_input);
             } else {
                 text_input.disable();
             }
@@ -1313,6 +1319,33 @@ impl WindowState {
         for text_input in self.text_inputs.iter() {
             text_input.set_cursor_rectangle(x, y, width, height);
             text_input.commit();
+        }
+    }
+
+    /// Set the text around the IME cursor: the text, with the cursor and the
+    /// selection anchor as byte offsets into it. `None`, text over the
+    /// protocol's 4000-byte bound, or offsets off a character boundary clear
+    /// it, and nothing is sent until it is set again.
+    pub fn set_ime_surrounding_text(&mut self, surrounding: Option<(String, usize, usize)>) {
+        let surrounding =
+            surrounding.and_then(|(text, cursor, anchor)| surrounding_text(text, cursor, anchor));
+        if self.ime_surrounding == surrounding {
+            return;
+        }
+        self.ime_surrounding = surrounding;
+        if !self.ime_allowed {
+            return;
+        }
+        for text_input in &self.text_inputs {
+            self.send_ime_surrounding(text_input);
+            text_input.commit();
+        }
+    }
+
+    /// Sends the text around the cursor, when there is any, without a commit.
+    pub fn send_ime_surrounding(&self, text_input: &ZwpTextInputV3) {
+        if let Some((text, cursor, anchor)) = &self.ime_surrounding {
+            text_input.set_surrounding_text(text.clone(), *cursor, *anchor);
         }
     }
 
@@ -1853,5 +1886,29 @@ fn resize_cursor(edge: XdgResizeEdge) -> CursorIcon {
         XdgResizeEdge::BottomLeft => CursorIcon::SwResize,
         XdgResizeEdge::BottomRight => CursorIcon::SeResize,
         _ => CursorIcon::Default,
+    }
+}
+
+/// The text around the IME cursor as the protocol carries it, or `None` for
+/// text over its 4000-byte bound or offsets off a character boundary.
+fn surrounding_text(text: String, cursor: usize, anchor: usize) -> Option<(String, i32, i32)> {
+    if text.len() > 4000 || !text.is_char_boundary(cursor) || !text.is_char_boundary(anchor) {
+        return None;
+    }
+    Some((text, i32::try_from(cursor).ok()?, i32::try_from(anchor).ok()?))
+}
+
+#[cfg(test)]
+mod surrounding_tests {
+    use super::surrounding_text;
+
+    // Sabotage: drop the character-boundary checks.
+    #[test]
+    fn surrounding_text_stays_within_the_protocol() {
+        assert_eq!(surrounding_text("héllo".into(), 3, 1), Some(("héllo".into(), 3, 1)));
+        assert_eq!(surrounding_text("héllo".into(), 2, 2), None, "inside é");
+        assert_eq!(surrounding_text("abc".into(), 4, 0), None, "past the end");
+        assert_eq!(surrounding_text("a".repeat(4001), 0, 0), None, "over 4000 bytes");
+        assert!(surrounding_text("a".repeat(4000), 4000, 4000).is_some());
     }
 }

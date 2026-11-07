@@ -1286,6 +1286,31 @@ impl Window {
         self.window.maybe_queue_on_main(move |w| w.set_ime_allowed(allowed))
     }
 
+    /// Tells the input method the text around the cursor in the field being
+    /// edited: `(text, cursor, anchor)`, with the cursor and the selection
+    /// anchor (equal when nothing is selected) as byte offsets into the
+    /// text. Input methods use it for context, such as spacing and
+    /// capitalisation. Send at most 4000 bytes around the cursor; `None`
+    /// (a secret field, or one with no text to tell) clears it.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Wayland:** `zwp_text_input_v3.set_surrounding_text`, sent again
+    ///   whenever the input method is enabled.
+    /// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding: Option<(String, usize, usize)>) {
+        let _span = tracing::debug_span!(
+            "winit::Window::set_ime_surrounding_text",
+            set = surrounding.is_some()
+        )
+        .entered();
+        #[cfg(any(x11_platform, wayland_platform))]
+        self.window.maybe_queue_on_main(move |w| w.set_ime_surrounding_text(surrounding));
+        #[cfg(not(any(x11_platform, wayland_platform)))]
+        let _ = surrounding;
+    }
+
     /// Sets the IME purpose for the window using [`ImePurpose`].
     ///
     /// ## Platform-specific

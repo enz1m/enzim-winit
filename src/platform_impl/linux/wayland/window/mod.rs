@@ -807,6 +807,11 @@ impl Window {
     }
 
     #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding: Option<(String, usize, usize)>) {
+        self.window_state.lock().unwrap().set_ime_surrounding_text(surrounding);
+    }
+
+    #[inline]
     pub fn focus_window(&self) {}
 
     #[inline]

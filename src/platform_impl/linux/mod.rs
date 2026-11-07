@@ -616,6 +616,16 @@ impl Window {
     }
 
     #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding: Option<(String, usize, usize)>) {
+        match self {
+            #[cfg(wayland_platform)]
+            Self::Wayland(w) => w.set_ime_surrounding_text(surrounding),
+            #[cfg(x11_platform)]
+            Self::X(_) => {},
+        }
+    }
+
+    #[inline]
     pub fn focus_window(&self) {
         x11_or_wayland!(match self; Window(w) => w.focus_window())
     }

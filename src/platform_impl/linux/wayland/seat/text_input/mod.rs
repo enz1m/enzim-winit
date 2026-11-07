@@ -75,6 +75,7 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
                 if window.ime_allowed() {
                     text_input.enable();
                     text_input.set_content_type_by_purpose(window.ime_purpose());
+                    window.send_ime_surrounding(text_input);
                     text_input.commit();
                     state.events_sink.push_window_event(WindowEvent::Ime(Ime::Enabled), window_id);
                 }
