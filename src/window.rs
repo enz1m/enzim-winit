@@ -1837,6 +1837,26 @@ pub enum ImePurpose {
     ///
     /// For example, that could alter OSK on Wayland to show extra buttons.
     Terminal,
+    /// A number, possibly with a sign and decimal separator.
+    Number,
+    /// Digits only, such as a quantity or a code.
+    Digits,
+    /// A one-time code or PIN; also hidden from the IME's history.
+    Pin,
+    /// A telephone number.
+    Phone,
+    /// An email address.
+    Email,
+    /// A URL.
+    Url,
+    /// A person's name.
+    Name,
+    /// A date.
+    Date,
+    /// A time of day.
+    Time,
+    /// A date and time.
+    DateTime,
 }
 
 /// An opaque token used to activate the [`Window`].
