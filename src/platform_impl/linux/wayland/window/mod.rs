@@ -42,6 +42,7 @@ use super::types::xdg_toplevel_icon::ToplevelIconManager;
 use super::types::xdg_toplevel_tag::ToplevelTagManager;
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
+mod shadow;
 pub(crate) mod state;
 
 pub use state::{ShellSurface, WindowState};
@@ -210,6 +211,7 @@ impl Window {
         );
 
         window_state.app_drawn_decorations = attributes.platform_specific.app_drawn_decorations;
+        window_state.window_shadow = attributes.platform_specific.window_shadow.clone();
         window_state.popup_of = popup_of;
 
         // Set transparency hint.
@@ -539,6 +541,11 @@ impl Window {
         self.window_state.lock().unwrap().set_blur(blur);
     }
 
+    /// Casts `shadow` around the window, or none (enzWinit).
+    pub fn set_window_shadow(&self, shadow: Option<crate::platform::wayland::WindowShadow>) {
+        self.window_state.lock().unwrap().set_window_shadow(shadow);
+    }
+
     #[inline]
     pub fn set_decorations(&self, decorate: bool) {
         self.window_state.lock().unwrap().set_decorate(decorate)
@@ -805,18 +812,6 @@ impl Window {
     #[inline]
     pub fn surface(&self) -> &WlSurface {
         self.window.wl_surface()
-    }
-
-    /// The connection this window's surface was created on.
-    #[inline]
-    pub fn connection(&self) -> Connection {
-        self.window_state.lock().unwrap().connection.clone()
-    }
-
-    /// Identity of this window's `wl_surface`.
-    #[inline]
-    pub fn surface_incarnation(&self) -> u64 {
-        self.window_state.lock().unwrap().surface_incarnation()
     }
 
     /// The objects an XDG portal parent export needs: this window's own

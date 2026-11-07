@@ -83,6 +83,9 @@ pub struct PlatformSpecificWindowAttributes {
     pub app_drawn_decorations: bool,
     /// The session to restore and this window's name in it (Wayland).
     pub session: Option<(Option<String>, String)>,
+    /// The shadow cast around a window that draws its own frame (Wayland).
+    #[cfg(wayland_platform)]
+    pub window_shadow: Option<crate::platform::wayland::WindowShadow>,
     #[cfg(x11_platform)]
     pub x11: X11WindowAttributes,
 }
@@ -111,6 +114,8 @@ impl Default for PlatformSpecificWindowAttributes {
             transient_parent: None,
             app_drawn_decorations: false,
             session: None,
+            #[cfg(wayland_platform)]
+            window_shadow: None,
             #[cfg(x11_platform)]
             x11: X11WindowAttributes {
                 visual_id: None,
@@ -157,7 +162,7 @@ pub(crate) enum Window {
     #[cfg(x11_platform)]
     X(x11::Window),
     #[cfg(wayland_platform)]
-    Wayland(wayland::Window),
+    Wayland(Box<wayland::Window>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -310,7 +315,8 @@ impl Window {
         match *window_target {
             #[cfg(wayland_platform)]
             ActiveEventLoop::Wayland(ref window_target) => {
-                wayland::Window::new(window_target, attribs).map(Window::Wayland)
+                wayland::Window::new(window_target, attribs)
+                    .map(|window| Window::Wayland(Box::new(window)))
             },
             #[cfg(x11_platform)]
             ActiveEventLoop::X(ref window_target) => {
@@ -351,6 +357,15 @@ impl Window {
             #[cfg(x11_platform)]
             Window::X(_) => None,
             Window::Wayland(window) => window.wayland_toplevel(),
+        }
+    }
+
+    #[cfg(wayland_platform)]
+    pub(crate) fn set_window_shadow(&self, shadow: Option<crate::platform::wayland::WindowShadow>) {
+        match self {
+            #[cfg(x11_platform)]
+            Window::X(_) => {},
+            Window::Wayland(window) => window.set_window_shadow(shadow),
         }
     }
 

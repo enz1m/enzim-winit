@@ -146,7 +146,7 @@ impl Dispatch<XdgActivationTokenV1, XdgActivationTokenData, WinitState> for XdgA
 }
 
 /// The data associated with the activation request.
-pub enum XdgActivationTokenData {
+pub(crate) enum XdgActivationTokenData {
     /// Request user attention for the given surface.
     Attention((WlSurface, Weak<AtomicBool>)),
     /// Get a token to be passed outside of the winit.

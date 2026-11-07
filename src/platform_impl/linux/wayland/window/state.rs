@@ -197,6 +197,9 @@ pub struct WindowState {
     blur: Option<OrgKdeKwinBlur>,
     blur_manager: Option<KWinBlurManager>,
 
+    /// The resize edge under a pointer on the shadow's resize band.
+    shadow_pointer: Option<XdgResizeEdge>,
+
     /// Whether the client side decorations have pending move operations.
     ///
     /// The value is the serial of the event triggered moved.
@@ -218,6 +221,17 @@ pub struct WindowState {
 
     /// The application draws the decorations when the compositor does not.
     pub app_drawn_decorations: bool,
+
+    /// The shadow cast around a window whose application draws its frame.
+    pub window_shadow: Option<crate::platform::wayland::WindowShadow>,
+
+    /// The subsurfaces carrying that shadow, made on first use.
+    shadow_surfaces: Option<super::shadow::ShadowSurfaces>,
+
+    /// The pool the shadow's buffers come from, until the surfaces take it.
+    shadow_pool: Option<SlotPool>,
+
+    subcompositor: Option<Arc<SubcompositorState>>,
 
     /// The decoration state last reported to the application.
     reported_decorations: Option<crate::event::WindowEvent>,
@@ -266,6 +280,10 @@ impl WindowState {
             popup_destroyed: false,
             geometry_origin: (0, 0),
             app_drawn_decorations: false,
+            window_shadow: None,
+            shadow_surfaces: None,
+            shadow_pool: SlotPool::new(1, &winit_state.shm).ok(),
+            subcompositor: winit_state.subcompositor_state.clone(),
             reported_decorations: None,
             cursor_grab_mode: GrabState::new(),
             selected_cursor: Default::default(),
@@ -277,6 +295,7 @@ impl WindowState {
             frame_pacing: FramePacing::from_env(),
             seat_focus: Default::default(),
             has_pending_move: None,
+            shadow_pointer: None,
             ime_allowed: false,
             ime_purpose: ImePurpose::Normal,
             last_configure: None,
@@ -487,6 +506,11 @@ impl WindowState {
             // NOTE: `None` is present for the initial configure, thus we must always resize.
             .unwrap_or(true);
 
+        let activation_changed = old_state.map_or(true, |old_state| {
+            old_state.contains(XdgWindowState::ACTIVATED)
+                != new_state.contains(XdgWindowState::ACTIVATED)
+        });
+
         // NOTE: Set the configure before doing a resize, since we query it during it.
         self.last_configure = Some(configure);
 
@@ -494,6 +518,9 @@ impl WindowState {
             self.resize(new_size);
             true
         } else {
+            if activation_changed {
+                self.update_shadow(false);
+            }
             false
         }
     }
@@ -569,6 +596,13 @@ impl WindowState {
         window_id: WindowId,
         updates: &mut Vec<WindowCompositorUpdate>,
     ) -> Option<bool> {
+        if let Some(edge) = self.shadow_pointer.take() {
+            if pressed && click == FrameClick::Normal && self.resizable {
+                self.window.resize(seat, serial, edge);
+            }
+            self.shadow_pointer = Some(edge);
+            return Some(false);
+        }
         match self.frame.as_mut()?.on_click(timestamp, click, pressed)? {
             FrameAction::Minimize => self.window.set_minimized(),
             FrameAction::Maximize => self.window.set_maximized(),
@@ -598,6 +632,7 @@ impl WindowState {
     }
 
     pub fn frame_point_left(&mut self) {
+        self.shadow_pointer = None;
         if let Some(frame) = self.frame.as_mut() {
             frame.click_point_left();
         }
@@ -612,6 +647,18 @@ impl WindowState {
         x: f64,
         y: f64,
     ) -> Option<CursorIcon> {
+        // The shadow's resize band.
+        if let Some(edge) = self
+            .shadow_surfaces
+            .as_ref()
+            .filter(|shadow| shadow.owns(surface))
+            .and_then(|shadow| shadow.resize_edge(surface, x, y))
+        {
+            self.shadow_pointer = Some(edge);
+            return self.resizable.then(|| resize_cursor(edge));
+        }
+        self.shadow_pointer = None;
+
         // Take the serial if we had any, so it doesn't stick around.
         let serial = self.has_pending_move.take();
 
@@ -891,6 +938,8 @@ impl WindowState {
             // Set inner size without the borders.
             viewport.set_destination(self.size.width as _, self.size.height as _);
         }
+
+        self.update_shadow(true);
     }
 
     /// Get the scale factor of the window.
@@ -1294,6 +1343,73 @@ impl WindowState {
 
         if let Some(frame) = self.frame.as_mut() {
             frame.set_scaling_factor(scale_factor);
+        }
+        self.update_shadow(true);
+    }
+
+    /// Casts `shadow` around the window, or none (enzWinit).
+    pub fn set_window_shadow(&mut self, shadow: Option<crate::platform::wayland::WindowShadow>) {
+        if self.window_shadow == shadow {
+            return;
+        }
+        self.window_shadow = shadow;
+        self.update_shadow(false);
+    }
+
+    /// Paints the shadow for the window's current size, activation and
+    /// tiling. Only a toplevel whose application draws its frame casts one;
+    /// the compositor's frame and winit's own carry their own.
+    fn update_shadow(&mut self, sync: bool) {
+        let casts = self.window.xdg_toplevel().is_some()
+            && self.frame.as_ref().map_or(true, |frame| frame.is_hidden())
+            && self
+                .last_configure
+                .as_ref()
+                .is_some_and(|configure| configure.decoration_mode == DecorationMode::Client);
+        let (Some(shadow), true) = (self.window_shadow.as_ref(), casts) else {
+            if let Some(surfaces) = self.shadow_surfaces.as_ref() {
+                surfaces.hide(sync);
+            }
+            self.shadow_pointer = None;
+            return;
+        };
+        let Some(subcompositor) = self.subcompositor.clone() else {
+            return;
+        };
+        let configure = self.last_configure.as_ref().expect("checked above");
+        let edges = if configure.is_maximized() || configure.is_fullscreen() {
+            super::shadow::Edges::NONE
+        } else {
+            super::shadow::Edges {
+                left: !configure.is_tiled_left(),
+                top: !configure.is_tiled_top(),
+                right: !configure.is_tiled_right(),
+                bottom: !configure.is_tiled_bottom(),
+            }
+        };
+        let active = configure.is_activated();
+        if self.shadow_surfaces.is_none() {
+            let Some(pool) = self.shadow_pool.take() else {
+                return;
+            };
+            self.shadow_surfaces = Some(super::shadow::ShadowSurfaces::new(pool));
+        }
+        let scale = self.scale_factor.ceil().max(1.0) as u32;
+        let size = (self.size.width, self.size.height);
+        let shadow = shadow.clone();
+        if let Some(surfaces) = self.shadow_surfaces.as_mut() {
+            surfaces.update(
+                self.window.wl_surface(),
+                &subcompositor,
+                &self.compositor,
+                &self.queue_handle,
+                &shadow,
+                active,
+                edges,
+                size,
+                scale,
+                sync,
+            );
         }
     }
 
@@ -1722,5 +1838,20 @@ impl ShellSurface {
         if let Some(window) = self.toplevel() {
             window.set_title(title);
         }
+    }
+}
+
+/// The pointer shape over a resize band.
+fn resize_cursor(edge: XdgResizeEdge) -> CursorIcon {
+    match edge {
+        XdgResizeEdge::Top => CursorIcon::NResize,
+        XdgResizeEdge::Bottom => CursorIcon::SResize,
+        XdgResizeEdge::Left => CursorIcon::WResize,
+        XdgResizeEdge::Right => CursorIcon::EResize,
+        XdgResizeEdge::TopLeft => CursorIcon::NwResize,
+        XdgResizeEdge::TopRight => CursorIcon::NeResize,
+        XdgResizeEdge::BottomLeft => CursorIcon::SwResize,
+        XdgResizeEdge::BottomRight => CursorIcon::SeResize,
+        _ => CursorIcon::Default,
     }
 }
