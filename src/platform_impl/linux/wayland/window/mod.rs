@@ -181,6 +181,8 @@ impl Window {
             attributes.preferred_theme,
         );
 
+        window_state.app_drawn_decorations = attributes.platform_specific.app_drawn_decorations;
+
         // Set transparency hint.
         window_state.set_transparent(attributes.transparent);
 

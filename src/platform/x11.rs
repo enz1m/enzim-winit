@@ -170,6 +170,13 @@ pub trait WindowAttributesExtX11 {
     /// `_NET_WM_STATE_MODAL` when `modal`.
     fn with_transient_parent(self, parent: crate::window::WindowId, modal: bool) -> Self;
 
+    /// Ask the compositor to decorate the window and, when it declines, draw
+    /// nothing: the application draws its own title bar and frame (enzWinit).
+    /// [`WindowEvent::DecorationsChanged`](crate::event::WindowEvent::DecorationsChanged)
+    /// says which happened. On X11, where nothing is negotiated, the window
+    /// gets no window-manager decorations.
+    fn with_app_drawn_decorations(self, app_drawn: bool) -> Self;
+
     /// Build window with base size hint.
     ///
     /// ```
@@ -230,6 +237,12 @@ impl WindowAttributesExtX11 for WindowAttributes {
     #[inline]
     fn with_x11_window_type(mut self, x11_window_types: Vec<WindowType>) -> Self {
         self.platform_specific.x11.x11_window_types = x11_window_types;
+        self
+    }
+
+    #[inline]
+    fn with_app_drawn_decorations(mut self, app_drawn: bool) -> Self {
+        self.platform_specific.app_drawn_decorations = app_drawn;
         self
     }
 

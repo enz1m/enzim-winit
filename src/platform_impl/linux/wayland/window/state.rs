@@ -197,6 +197,12 @@ pub struct WindowState {
     /// A popup received its first configure.
     popup_configured: bool,
 
+    /// The application draws the decorations when the compositor does not.
+    pub app_drawn_decorations: bool,
+
+    /// The decoration state last reported to the application.
+    reported_decorations: Option<crate::event::WindowEvent>,
+
     /// The underlying SCTK surface: a toplevel window or a popup.
     pub window: ShellSurface,
 
@@ -237,6 +243,8 @@ impl WindowState {
             surface_incarnation: NEXT_SURFACE_INCARNATION.fetch_add(1, Ordering::Relaxed),
             csd_fails: false,
             popup_configured: false,
+            app_drawn_decorations: false,
+            reported_decorations: None,
             cursor_grab_mode: GrabState::new(),
             selected_cursor: Default::default(),
             cursor_visible: true,
@@ -340,6 +348,7 @@ impl WindowState {
                 configure.decoration_mode == DecorationMode::Client
                     && self.frame.is_none()
                     && !self.csd_fails
+                    && !self.app_drawn_decorations
             }),
             self.window.toplevel(),
         ) {
@@ -679,6 +688,28 @@ impl WindowState {
 
     pub fn record_activation_serial(&mut self, serial: u32, seat: WlSeat) {
         self.activation_serial.record(serial, seat, Instant::now());
+    }
+
+    /// The decoration state of the last configure, when it differs from the
+    /// one last reported.
+    pub fn decorations_change(&mut self) -> Option<crate::event::WindowEvent> {
+        let configure = self.last_configure.as_ref()?;
+        let event = crate::event::WindowEvent::DecorationsChanged {
+            server_side: configure.decoration_mode == DecorationMode::Server,
+            tiled: crate::event::TiledEdges {
+                top: configure.is_tiled_top(),
+                bottom: configure.is_tiled_bottom(),
+                left: configure.is_tiled_left(),
+                right: configure.is_tiled_right(),
+            },
+            maximized: configure.is_maximized(),
+            fullscreen: configure.is_fullscreen(),
+        };
+        if self.reported_decorations.as_ref() == Some(&event) {
+            return None;
+        }
+        self.reported_decorations = Some(event.clone());
+        Some(event)
     }
 
     /// The latest pointer press on this window, without consuming it.

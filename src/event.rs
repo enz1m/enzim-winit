@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The [`Event`] enum and assorted supporting types.
 //!
 //! These are sent to the closure given to [`EventLoop::run_app(...)`], where they get
@@ -161,6 +162,16 @@ pub enum StartCause {
 
     /// Sent once, immediately after `run` is called. Indicates that the loop was just initialized.
     Init,
+}
+
+/// Which edges of a window the compositor tiled against a neighbour or the
+/// screen edge, for [`WindowEvent::DecorationsChanged`] (enzWinit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TiledEdges {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
 }
 
 /// Describes an event from a [`Window`].
@@ -440,6 +451,22 @@ pub enum WindowEvent {
     /// [`padding`]: https://developer.mozilla.org/en-US/docs/Web/CSS/padding
     /// [`transform`]: https://developer.mozilla.org/en-US/docs/Web/CSS/transform
     Occluded(bool),
+
+    /// How the compositor decorates and arranges the window (enzWinit):
+    /// whether it draws the title bar and frame itself, which edges touch
+    /// another window or the screen, and whether it is maximized or
+    /// fullscreen. Wayland sends it whenever one of these changes; other
+    /// platforms do not send it.
+    DecorationsChanged {
+        /// The compositor draws the window's title bar and frame.
+        server_side: bool,
+        /// The edges tiled against a neighbour or the screen edge.
+        tiled: TiledEdges,
+        /// The window is maximized.
+        maximized: bool,
+        /// The window is fullscreen.
+        fullscreen: bool,
+    },
 
     /// Emitted when a window should be redrawn.
     ///

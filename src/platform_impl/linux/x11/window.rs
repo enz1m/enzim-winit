@@ -358,7 +358,11 @@ impl UnownedWindow {
         // title to determine placement/etc., so doing this after mapping would cause the WM to
         // act on the wrong title state.
         leap!(window.set_title_inner(&window_attrs.title)).ignore_error();
-        leap!(window.set_decorations_inner(window_attrs.decorations)).ignore_error();
+        // An application that draws its own decorations gets none from the
+        // window manager: X11 negotiates nothing.
+        let decorations =
+            window_attrs.decorations && !window_attrs.platform_specific.app_drawn_decorations;
+        leap!(window.set_decorations_inner(decorations)).ignore_error();
 
         if let Some(theme) = window_attrs.preferred_theme {
             leap!(window.set_theme_inner(Some(theme))).ignore_error();

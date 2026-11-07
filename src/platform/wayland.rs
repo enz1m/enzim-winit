@@ -166,6 +166,13 @@ pub trait WindowAttributesExtWayland {
     /// `xdg_wm_dialog_v1`, a dialog marked modal or not. A modal dialog
     /// blocks the parent for the compositor.
     fn with_transient_parent(self, parent: crate::window::WindowId, modal: bool) -> Self;
+
+    /// Ask the compositor to decorate the window and, when it declines, draw
+    /// nothing: the application draws its own title bar and frame (enzWinit).
+    /// [`WindowEvent::DecorationsChanged`](crate::event::WindowEvent::DecorationsChanged)
+    /// says which happened. On X11, where nothing is negotiated, the window
+    /// gets no window-manager decorations.
+    fn with_app_drawn_decorations(self, app_drawn: bool) -> Self;
 }
 
 impl WindowAttributesExtWayland for WindowAttributes {
@@ -179,6 +186,12 @@ impl WindowAttributesExtWayland for WindowAttributes {
     #[inline]
     fn with_popup(mut self, popup: PopupAttributes) -> Self {
         self.platform_specific.popup = Some(popup);
+        self
+    }
+
+    #[inline]
+    fn with_app_drawn_decorations(mut self, app_drawn: bool) -> Self {
+        self.platform_specific.app_drawn_decorations = app_drawn;
         self
     }
 
