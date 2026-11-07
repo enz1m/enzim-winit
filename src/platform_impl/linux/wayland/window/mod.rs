@@ -34,6 +34,7 @@ use super::event_loop::sink::EventSink;
 use super::output::MonitorHandle;
 use super::state::WinitState;
 use super::types::xdg_activation::{PendingActivationRequests, XdgActivationTokenData};
+use super::types::xdg_toplevel_tag::ToplevelTagManager;
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
 pub(crate) mod state;
@@ -62,6 +63,7 @@ pub struct Window {
 
     /// Xdg activation to request user attention.
     xdg_activation: Option<XdgActivationV1>,
+    toplevel_tag_manager: Option<ToplevelTagManager>,
 
     /// The state of the requested attention from the `xdg_activation`.
     attention_requested: Arc<AtomicBool>,
@@ -99,6 +101,7 @@ impl Window {
         let xdg_activation =
             state.xdg_activation.as_ref().map(|activation_state| activation_state.global().clone());
         let display = event_loop_window_target.connection.display();
+        let toplevel_tag_manager = state.toplevel_tag_manager.clone();
 
         let size: Size = attributes.inner_size.unwrap_or(LogicalSize::new(800., 600.).into());
 
@@ -231,6 +234,7 @@ impl Window {
             window_state,
             queue_handle,
             xdg_activation,
+            toplevel_tag_manager,
             attention_requested: Arc::new(AtomicBool::new(false)),
             activation_requests: Arc::new(PendingActivationRequests::default()),
             event_loop_awakener,
@@ -702,6 +706,21 @@ impl Window {
             self.window.wl_surface().clone(),
             state.surface_incarnation(),
         )
+    }
+
+    pub(crate) fn set_toplevel_tag(&self, tag: &str) -> bool {
+        if tag.is_empty()
+            || tag.len() > 128
+            || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+        {
+            return false;
+        }
+        let Some(manager) = &self.toplevel_tag_manager else {
+            return false;
+        };
+        manager.set(self.window.xdg_toplevel(), tag);
+        self.event_loop_awakener.ping();
+        true
     }
 
     #[inline]

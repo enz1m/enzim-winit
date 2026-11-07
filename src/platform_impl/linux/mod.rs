@@ -329,6 +329,15 @@ impl Window {
         }
     }
 
+    #[cfg(wayland_platform)]
+    pub(crate) fn set_toplevel_tag(&self, tag: &str) -> bool {
+        match self {
+            #[cfg(x11_platform)]
+            Window::X(_) => false,
+            Window::Wayland(window) => window.set_toplevel_tag(tag),
+        }
+    }
+
     #[inline]
     pub fn set_title(&self, title: &str) {
         x11_or_wayland!(match self; Window(w) => w.set_title(title));

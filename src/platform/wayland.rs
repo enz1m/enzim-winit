@@ -96,6 +96,13 @@ pub trait WindowExtWayland {
     /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
 
+    /// Queues an opaque `xdg_toplevel_tag` on this window's own toplevel.
+    ///
+    /// Returns false for X11, an unavailable protocol, or tags outside 1–128
+    /// ASCII alphanumerics and `._:-`. The compositor processes the request
+    /// asynchronously; no roundtrip or additional connection is opened.
+    fn set_toplevel_tag(&self, tag: &str) -> bool;
+
     /// The window's own connection, surface and surface identity, for an XDG
     /// portal parent export; `None` for a window that is not Wayland.
     ///
@@ -108,6 +115,10 @@ pub trait WindowExtWayland {
 }
 
 impl WindowExtWayland for Window {
+    fn set_toplevel_tag(&self, tag: &str) -> bool {
+        self.window.set_toplevel_tag(tag)
+    }
+
     #[inline]
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
         #[allow(clippy::single_match)]
