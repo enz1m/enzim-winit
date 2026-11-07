@@ -194,8 +194,11 @@ pub struct WindowState {
     /// The value is the serial of the event triggered moved.
     has_pending_move: Option<u32>,
 
-    /// The underlying SCTK window.
-    pub window: Window,
+    /// A popup received its first configure.
+    popup_configured: bool,
+
+    /// The underlying SCTK surface: a toplevel window or a popup.
+    pub window: ShellSurface,
 
     // NOTE: The spec says that destroying parent(`window` in our case), will unmap the
     // subsurfaces. Thus to achieve atomic unmap of the client, drop the decorations
@@ -212,7 +215,7 @@ impl WindowState {
         queue_handle: &QueueHandle<WinitState>,
         winit_state: &WinitState,
         initial_size: Size,
-        window: Window,
+        window: ShellSurface,
         theme: Option<Theme>,
     ) -> Self {
         let compositor = winit_state.compositor_state.clone();
@@ -233,6 +236,7 @@ impl WindowState {
             connection,
             surface_incarnation: NEXT_SURFACE_INCARNATION.fetch_add(1, Ordering::Relaxed),
             csd_fails: false,
+            popup_configured: false,
             cursor_grab_mode: GrabState::new(),
             selected_cursor: Default::default(),
             cursor_visible: true,
@@ -331,13 +335,16 @@ impl WindowState {
             self.stateless_size = self.size;
         }
 
-        if let Some(subcompositor) = subcompositor.as_ref().filter(|_| {
-            configure.decoration_mode == DecorationMode::Client
-                && self.frame.is_none()
-                && !self.csd_fails
-        }) {
+        if let (Some(subcompositor), Some(toplevel)) = (
+            subcompositor.as_ref().filter(|_| {
+                configure.decoration_mode == DecorationMode::Client
+                    && self.frame.is_none()
+                    && !self.csd_fails
+            }),
+            self.window.toplevel(),
+        ) {
             match WinitFrame::new(
-                &self.window,
+                toplevel,
                 shm,
                 #[cfg(feature = "sctk-adwaita")]
                 self.compositor.clone(),
@@ -486,7 +493,9 @@ impl WindowState {
 
     /// Start interacting drag resize.
     pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), ExternalError> {
-        let xdg_toplevel = self.window.xdg_toplevel();
+        let Some(xdg_toplevel) = self.window.xdg_toplevel() else {
+            return Ok(());
+        };
 
         // TODO(kchibisov) handle touch serials.
         self.apply_on_pointer(|_, data| {
@@ -501,7 +510,9 @@ impl WindowState {
 
     /// Start the window drag.
     pub fn drag_window(&self) -> Result<(), ExternalError> {
-        let xdg_toplevel = self.window.xdg_toplevel();
+        let Some(xdg_toplevel) = self.window.xdg_toplevel() else {
+            return Ok(());
+        };
         // TODO(kchibisov) handle touch serials.
         self.apply_on_pointer(|_, data| {
             if let Some(serial) = data.latest_button_serial() {
@@ -639,7 +650,7 @@ impl WindowState {
     /// Whether the window received initial configure event from the compositor.
     #[inline]
     pub fn is_configured(&self) -> bool {
-        self.last_configure.is_some()
+        self.last_configure.is_some() || self.popup_configured
     }
 
     #[inline]
@@ -668,6 +679,25 @@ impl WindowState {
 
     pub fn record_activation_serial(&mut self, serial: u32, seat: WlSeat) {
         self.activation_serial.record(serial, seat, Instant::now());
+    }
+
+    /// The latest pointer press on this window, without consuming it.
+    pub fn latest_input_serial(&self) -> Option<(u32, WlSeat)> {
+        self.activation_serial.pending.as_ref().map(|(serial, seat, _)| (*serial, seat.clone()))
+    }
+
+    /// Applies an `xdg_popup` configure: the size the compositor gave the
+    /// popup. Returns whether the size changed (always true the first time).
+    pub fn configure_popup(&mut self, width: i32, height: i32) -> bool {
+        if let Some(initial_size) = self.initial_size.take() {
+            self.size = initial_size.to_logical(self.scale_factor());
+        }
+        let first = !self.popup_configured;
+        self.popup_configured = true;
+        let size = LogicalSize::new(width.max(1) as u32, height.max(1) as u32);
+        let resized = first || size != self.size;
+        self.resize(size);
+        resized
     }
 
     pub fn take_activation_serial(&mut self, max_age: Duration) -> Option<(u32, WlSeat)> {
@@ -1468,5 +1498,117 @@ mod frame_pacing_tests {
         assert_eq!(pacing.limit(), 1);
         let pacing = FramePacing { forced_limit: Some(2), ..FramePacing::default() };
         assert_eq!(pacing.limit(), 2);
+    }
+}
+
+/// The shell role of a window's surface: an `xdg_toplevel` or an `xdg_popup`.
+///
+/// Toplevel requests (title, size limits, maximizing, decorations, the window
+/// menu, interactive move and resize) do nothing on a popup.
+#[derive(Debug, Clone)]
+pub enum ShellSurface {
+    Toplevel(Window),
+    Popup(sctk::shell::xdg::popup::Popup),
+}
+
+impl ShellSurface {
+    pub fn wl_surface(&self) -> &WlSurface {
+        match self {
+            Self::Toplevel(window) => window.wl_surface(),
+            Self::Popup(popup) => popup.wl_surface(),
+        }
+    }
+
+    pub fn xdg_surface(
+        &self,
+    ) -> &sctk::reexports::protocols::xdg::shell::client::xdg_surface::XdgSurface {
+        match self {
+            Self::Toplevel(window) => window.xdg_surface(),
+            Self::Popup(popup) => popup.xdg_surface(),
+        }
+    }
+
+    pub fn toplevel(&self) -> Option<&Window> {
+        match self {
+            Self::Toplevel(window) => Some(window),
+            Self::Popup(_) => None,
+        }
+    }
+
+    pub fn xdg_toplevel(
+        &self,
+    ) -> Option<&sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel> {
+        self.toplevel().map(Window::xdg_toplevel)
+    }
+
+    pub fn set_buffer_scale(&self, scale: u32) -> Result<(), sctk::shell::Unsupported> {
+        match self {
+            Self::Toplevel(window) => window.set_buffer_scale(scale),
+            Self::Popup(popup) => popup.set_buffer_scale(scale),
+        }
+    }
+
+    pub fn commit(&self) {
+        self.wl_surface().commit();
+    }
+
+    pub fn set_minimized(&self) {
+        if let Some(window) = self.toplevel() {
+            window.set_minimized();
+        }
+    }
+
+    pub fn set_maximized(&self) {
+        if let Some(window) = self.toplevel() {
+            window.set_maximized();
+        }
+    }
+
+    pub fn unset_maximized(&self) {
+        if let Some(window) = self.toplevel() {
+            window.unset_maximized();
+        }
+    }
+
+    pub fn resize(&self, seat: &WlSeat, serial: u32, edge: XdgResizeEdge) {
+        if let Some(window) = self.toplevel() {
+            window.resize(seat, serial, edge);
+        }
+    }
+
+    pub fn move_(&self, seat: &WlSeat, serial: u32) {
+        if let Some(window) = self.toplevel() {
+            window.move_(seat, serial);
+        }
+    }
+
+    pub fn show_window_menu(&self, seat: &WlSeat, serial: u32, position: (i32, i32)) {
+        if let Some(window) = self.toplevel() {
+            window.show_window_menu(seat, serial, position);
+        }
+    }
+
+    pub fn set_min_size(&self, size: Option<(u32, u32)>) {
+        if let Some(window) = self.toplevel() {
+            window.set_min_size(size);
+        }
+    }
+
+    pub fn set_max_size(&self, size: Option<(u32, u32)>) {
+        if let Some(window) = self.toplevel() {
+            window.set_max_size(size);
+        }
+    }
+
+    pub fn request_decoration_mode(&self, mode: Option<DecorationMode>) {
+        if let Some(window) = self.toplevel() {
+            window.request_decoration_mode(mode);
+        }
+    }
+
+    pub fn set_title(&self, title: &str) {
+        if let Some(window) = self.toplevel() {
+            window.set_title(title);
+        }
     }
 }

@@ -17,6 +17,7 @@ use sctk::output::{OutputHandler, OutputState};
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::ThemedPointer;
 use sctk::seat::SeatState;
+use sctk::shell::xdg::popup::{Popup, PopupConfigure, PopupHandler};
 use sctk::shell::xdg::window::{Window, WindowConfigure, WindowHandler};
 use sctk::shell::xdg::XdgShell;
 use sctk::shell::WaylandSurface;
@@ -307,6 +308,50 @@ impl WindowHandler for WinitState {
 
         // Manually mark that we've got an event, since configure may not generate a resize.
         self.dispatched_events = true;
+    }
+}
+
+impl PopupHandler for WinitState {
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        popup: &Popup,
+        configure: PopupConfigure,
+    ) {
+        let window_id = super::make_wid(popup.wl_surface());
+        let Some(window) = self.windows.get_mut().get(&window_id) else {
+            return;
+        };
+        let (resized, scale_factor) = {
+            let mut window = window.lock().unwrap();
+            (window.configure_popup(configure.width, configure.height), window.scale_factor())
+        };
+
+        let pos = if let Some(pos) =
+            self.window_compositor_updates.iter().position(|update| update.window_id == window_id)
+        {
+            pos
+        } else {
+            self.window_compositor_updates.push(WindowCompositorUpdate::new(window_id));
+            self.window_compositor_updates.len() - 1
+        };
+        self.window_compositor_updates[pos].resized |= resized;
+
+        // Where the compositor put the popup, after any constraint adjustment.
+        let position = crate::dpi::LogicalPosition::new(configure.position.0, configure.position.1)
+            .to_physical::<i32>(scale_factor);
+        self.events_sink.push_window_event(crate::event::WindowEvent::Moved(position), window_id);
+
+        if let Some(requests) = self.window_requests.get_mut().get(&window_id) {
+            requests.redraw_requested.store(true, Ordering::Relaxed);
+        }
+        self.dispatched_events = true;
+    }
+
+    fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
+        let window_id = super::make_wid(popup.wl_surface());
+        Self::queue_close(&mut self.window_compositor_updates, window_id);
     }
 }
 

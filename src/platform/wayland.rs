@@ -145,6 +145,20 @@ pub trait WindowAttributesExtWayland {
     /// For details about application ID conventions, see the
     /// [Desktop Entry Spec](https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html#desktop-file-id)
     fn with_name(self, general: impl Into<String>, instance: impl Into<String>) -> Self;
+
+    /// Build the window as an `xdg_popup` of another window instead of a
+    /// toplevel: a menu, list or tooltip that may extend past its parent's
+    /// edges and that the compositor keeps on screen.
+    ///
+    /// The popup is [`PopupAttributes::size`] large and carries no
+    /// decorations or title. Pointer events arrive with the popup's own
+    /// [`WindowId`](crate::window::WindowId) in its own coordinates;
+    /// [`WindowEvent::Moved`](crate::event::WindowEvent::Moved) reports where
+    /// the compositor placed it relative to the parent, after any constraint
+    /// adjustment, and
+    /// [`WindowEvent::CloseRequested`](crate::event::WindowEvent::CloseRequested)
+    /// means the compositor dismissed it. Ignored on X11.
+    fn with_popup(self, popup: PopupAttributes) -> Self;
 }
 
 impl WindowAttributesExtWayland for WindowAttributes {
@@ -153,6 +167,83 @@ impl WindowAttributesExtWayland for WindowAttributes {
         self.platform_specific.name =
             Some(crate::platform_impl::ApplicationName::new(general.into(), instance.into()));
         self
+    }
+
+    #[inline]
+    fn with_popup(mut self, popup: PopupAttributes) -> Self {
+        self.platform_specific.popup = Some(popup);
+        self
+    }
+}
+
+/// Where an `xdg_popup` goes, in its parent's logical coordinates.
+///
+/// The positioner rule: take `anchor_rect`, pick the point `anchor` names on
+/// it, add `offset`, and grow the popup away from that point in the
+/// direction of `gravity`. When that would put it off screen, the compositor
+/// applies `constraint_adjustment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupAttributes {
+    /// The window this popup belongs to.
+    pub parent: crate::window::WindowId,
+    /// The rectangle the popup is placed against: x, y, width, height.
+    pub anchor_rect: (i32, i32, i32, i32),
+    /// The popup's size: width, height.
+    pub size: (i32, i32),
+    /// The point on `anchor_rect` the popup is placed against.
+    pub anchor: PopupEdge,
+    /// The direction the popup grows from that point.
+    pub gravity: PopupEdge,
+    /// Added to the anchor point.
+    pub offset: (i32, i32),
+    /// What the compositor may do when the popup does not fit on screen.
+    pub constraint_adjustment: PopupConstraint,
+    /// Take an explicit grab with the parent's latest input serial: the popup
+    /// gets keyboard focus and is dismissed by a click anywhere else.
+    pub grab: bool,
+}
+
+/// An edge or corner of a rectangle, for [`PopupAttributes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupEdge {
+    /// The centre.
+    #[default]
+    None,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    BottomLeft,
+    TopRight,
+    BottomRight,
+}
+
+/// Ways the compositor may adjust a popup that does not fit on screen, as
+/// `xdg_positioner.constraint_adjustment` bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PopupConstraint(pub u32);
+
+impl PopupConstraint {
+    /// Keep the popup where asked, even partly off screen.
+    pub const NONE: Self = Self(0);
+    /// Slide horizontally until it fits.
+    pub const SLIDE_X: Self = Self(1);
+    /// Slide vertically until it fits.
+    pub const SLIDE_Y: Self = Self(2);
+    /// Mirror the anchor and gravity horizontally.
+    pub const FLIP_X: Self = Self(4);
+    /// Mirror the anchor and gravity vertically.
+    pub const FLIP_Y: Self = Self(8);
+    /// Shrink horizontally.
+    pub const RESIZE_X: Self = Self(16);
+    /// Shrink vertically.
+    pub const RESIZE_Y: Self = Self(32);
+
+    /// Both adjustments.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 }
 

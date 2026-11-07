@@ -13,8 +13,10 @@ use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 
 use sctk::compositor::{CompositorState, Region, SurfaceData};
 use sctk::reexports::protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
-use sctk::shell::xdg::window::{Window as SctkWindow, WindowDecorations};
-use sctk::shell::WaylandSurface;
+use sctk::reexports::protocols::xdg::shell::client::xdg_positioner;
+use sctk::shell::xdg::popup::Popup;
+use sctk::shell::xdg::window::WindowDecorations;
+use sctk::shell::xdg::{XdgPositioner, XdgShell};
 
 use tracing::warn;
 
@@ -39,14 +41,14 @@ use super::{ActiveEventLoop, WaylandError, WindowId};
 
 pub(crate) mod state;
 
-pub use state::WindowState;
+pub use state::{ShellSurface, WindowState};
 
 const ACTIVATION_SERIAL_LIFETIME: Duration = Duration::from_secs(1);
 
 /// The Wayland window.
 pub struct Window {
-    /// Reference to the underlying SCTK window.
-    window: SctkWindow,
+    /// Reference to the underlying SCTK toplevel or popup.
+    window: ShellSurface,
 
     /// Window id.
     window_id: WindowId,
@@ -113,8 +115,41 @@ impl Window {
             WindowDecorations::RequestClient
         };
 
-        let window =
-            state.xdg_shell.create_window(surface.clone(), default_decorations, &queue_handle);
+        let popup = attributes.platform_specific.popup;
+        let window = match popup {
+            None => ShellSurface::Toplevel(state.xdg_shell.create_window(
+                surface.clone(),
+                default_decorations,
+                &queue_handle,
+            )),
+            Some(popup) => {
+                let parent = state.windows.get_mut().get(&popup.parent.0).map(|parent| {
+                    let parent = parent.lock().unwrap();
+                    let grab = popup.grab.then(|| parent_serial(&parent)).flatten();
+                    (parent.window.xdg_surface().clone(), grab)
+                });
+                let Some((parent, grab)) = parent else {
+                    return Err(os_error!(OsError::Misc(
+                        "the popup's parent window does not exist"
+                    )));
+                };
+                let positioner = positioner(&state.xdg_shell, &popup)
+                    .map_err(|_| os_error!(OsError::Misc("the compositor has no xdg_wm_base")))?;
+                let popup = Popup::from_surface(
+                    Some(&parent),
+                    &positioner,
+                    &queue_handle,
+                    surface.clone(),
+                    &state.xdg_shell,
+                )
+                .map_err(|_| os_error!(OsError::Misc("the compositor has no xdg_wm_base")))?;
+                if let Some((serial, seat)) = grab {
+                    popup.xdg_popup().grab(&seat, serial);
+                }
+                ShellSurface::Popup(popup)
+            },
+        };
+        let is_popup = popup.is_some();
 
         let mut window_state = WindowState::new(
             event_loop_window_target.connection.clone(),
@@ -130,12 +165,14 @@ impl Window {
 
         window_state.set_blur(attributes.blur);
 
-        // Set the decorations hint.
-        window_state.set_decorate(attributes.decorations);
+        // Set the decorations hint; a popup has none.
+        window_state.set_decorate(attributes.decorations && !is_popup);
 
         // Set the app_id.
-        if let Some(name) = attributes.platform_specific.name.map(|name| name.general) {
-            window.set_app_id(name);
+        if let (Some(name), Some(toplevel)) =
+            (attributes.platform_specific.name.map(|name| name.general), window.toplevel())
+        {
+            toplevel.set_app_id(name);
         }
 
         // Set the window title.
@@ -164,7 +201,9 @@ impl Window {
                     PlatformMonitorHandle::X(_) => None,
                 });
 
-                window.set_fullscreen(output.as_ref())
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.set_fullscreen(output.as_ref());
+                }
             },
             _ if attributes.maximized => window.set_maximized(),
             _ => (),
@@ -244,7 +283,7 @@ impl Window {
     }
 
     pub(crate) fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
-        NonNull::new(self.window.xdg_toplevel().id().as_ptr().cast())
+        NonNull::new(self.window.xdg_toplevel()?.id().as_ptr().cast())
     }
 }
 
@@ -507,9 +546,15 @@ impl Window {
                     PlatformMonitorHandle::X(_) => None,
                 });
 
-                self.window.set_fullscreen(output.as_ref())
+                if let Some(toplevel) = self.window.toplevel() {
+                    toplevel.set_fullscreen(output.as_ref());
+                }
             },
-            None => self.window.unset_fullscreen(),
+            None => {
+                if let Some(toplevel) = self.window.toplevel() {
+                    toplevel.unset_fullscreen();
+                }
+            },
         }
     }
 
@@ -718,7 +763,10 @@ impl Window {
         let Some(manager) = &self.toplevel_tag_manager else {
             return false;
         };
-        manager.set(self.window.xdg_toplevel(), tag);
+        let Some(toplevel) = self.window.xdg_toplevel() else {
+            return false;
+        };
+        manager.set(toplevel, tag);
         self.event_loop_awakener.ping();
         true
     }
@@ -854,4 +902,52 @@ impl TryFrom<&str> for Theme {
             Err(())
         }
     }
+}
+
+/// The latest press on the parent, for an explicit popup grab.
+fn parent_serial(
+    parent: &WindowState,
+) -> Option<(u32, sctk::reexports::client::protocol::wl_seat::WlSeat)> {
+    parent.latest_input_serial()
+}
+
+/// An `xdg_positioner` for `popup`.
+fn positioner(
+    xdg_shell: &XdgShell,
+    popup: &crate::platform::wayland::PopupAttributes,
+) -> Result<XdgPositioner, sctk::error::GlobalError> {
+    use crate::platform::wayland::PopupEdge;
+    let positioner = XdgPositioner::new(xdg_shell)?;
+    let (x, y, width, height) = popup.anchor_rect;
+    positioner.set_size(popup.size.0.max(1), popup.size.1.max(1));
+    positioner.set_anchor_rect(x, y, width.max(1), height.max(1));
+    let anchor = |edge: PopupEdge| match edge {
+        PopupEdge::None => xdg_positioner::Anchor::None,
+        PopupEdge::Top => xdg_positioner::Anchor::Top,
+        PopupEdge::Bottom => xdg_positioner::Anchor::Bottom,
+        PopupEdge::Left => xdg_positioner::Anchor::Left,
+        PopupEdge::Right => xdg_positioner::Anchor::Right,
+        PopupEdge::TopLeft => xdg_positioner::Anchor::TopLeft,
+        PopupEdge::BottomLeft => xdg_positioner::Anchor::BottomLeft,
+        PopupEdge::TopRight => xdg_positioner::Anchor::TopRight,
+        PopupEdge::BottomRight => xdg_positioner::Anchor::BottomRight,
+    };
+    let gravity = |edge: PopupEdge| match edge {
+        PopupEdge::None => xdg_positioner::Gravity::None,
+        PopupEdge::Top => xdg_positioner::Gravity::Top,
+        PopupEdge::Bottom => xdg_positioner::Gravity::Bottom,
+        PopupEdge::Left => xdg_positioner::Gravity::Left,
+        PopupEdge::Right => xdg_positioner::Gravity::Right,
+        PopupEdge::TopLeft => xdg_positioner::Gravity::TopLeft,
+        PopupEdge::BottomLeft => xdg_positioner::Gravity::BottomLeft,
+        PopupEdge::TopRight => xdg_positioner::Gravity::TopRight,
+        PopupEdge::BottomRight => xdg_positioner::Gravity::BottomRight,
+    };
+    positioner.set_anchor(anchor(popup.anchor));
+    positioner.set_gravity(gravity(popup.gravity));
+    positioner.set_offset(popup.offset.0, popup.offset.1);
+    positioner.set_constraint_adjustment(xdg_positioner::ConstraintAdjustment::from_bits_truncate(
+        popup.constraint_adjustment.0,
+    ));
+    Ok(positioner)
 }
