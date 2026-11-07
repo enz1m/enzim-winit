@@ -28,8 +28,8 @@ use sctk::subcompositor::SubcompositorState;
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::output::MonitorHandle;
 use crate::platform_impl::wayland::seat::{
-    PointerConstraintsState, PointerGesturesState, RelativePointerState, TextInputState,
-    WinitPointerData, WinitPointerDataExt, WinitSeatState,
+    PointerConstraintsState, PointerGesturesState, RelativePointerState, TabletState,
+    TextInputState, WinitPointerData, WinitPointerDataExt, WinitSeatState,
 };
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
 use crate::platform_impl::wayland::types::wp_fractional_scaling::FractionalScalingManager;
@@ -108,6 +108,9 @@ pub struct WinitState {
     /// The touchpad gestures global, when the compositor offers it.
     pub pointer_gestures: Option<PointerGesturesState>,
 
+    /// Drawing tablets, when the compositor offers them.
+    pub tablets: Option<TabletState>,
+
     /// Pointer constraints to handle pointer locking and confining.
     pub pointer_constraints: Option<Arc<PointerConstraintsState>>,
 
@@ -155,8 +158,12 @@ impl WinitState {
         let seat_state = SeatState::new(globals, queue_handle);
 
         let mut seats = AHashMap::default();
+        let mut tablets = TabletState::new(globals, queue_handle).ok();
         for seat in seat_state.seats() {
             seats.insert(seat.id(), WinitSeatState::new());
+            if let Some(tablets) = &mut tablets {
+                tablets.add_seat(&seat, queue_handle);
+            }
         }
 
         let (viewporter_state, fractional_scaling_manager) =
@@ -196,6 +203,7 @@ impl WinitState {
 
             relative_pointer: RelativePointerState::new(globals, queue_handle).ok(),
             pointer_gestures: PointerGesturesState::new(globals, queue_handle).ok(),
+            tablets,
             pointer_constraints: PointerConstraintsState::new(globals, queue_handle)
                 .map(Arc::new)
                 .ok(),

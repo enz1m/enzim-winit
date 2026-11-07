@@ -22,12 +22,14 @@ use crate::platform_impl::wayland::state::WinitState;
 
 mod keyboard;
 mod pointer;
+mod tablet;
 mod text_input;
 mod touch;
 
 pub use pointer::gestures::{PointerGesturesState, SeatGestures};
 pub use pointer::relative_pointer::RelativePointerState;
 pub use pointer::{PointerConstraintsState, WinitPointerData, WinitPointerDataExt};
+pub use tablet::{TabletCursor, TabletState};
 pub use text_input::{TextInputState, ZwpTextInputV3Ext};
 
 use keyboard::{KeyboardData, KeyboardState};
@@ -226,6 +228,9 @@ impl SeatHandler for WinitState {
         _queue_handle: &QueueHandle<Self>,
         seat: WlSeat,
     ) {
+        if let Some(tablets) = &mut self.tablets {
+            tablets.add_seat(&seat, _queue_handle);
+        }
         self.seats.insert(seat.id(), WinitSeatState::new());
     }
 
@@ -236,6 +241,9 @@ impl SeatHandler for WinitState {
         seat: WlSeat,
     ) {
         let seat_id = seat.id();
+        if let Some(tablets) = &mut self.tablets {
+            tablets.remove_seat(&seat);
+        }
         let _ = self.seats.remove(&seat_id);
         for window in self.windows.get_mut().values_mut() {
             window.lock().unwrap().invalidate_activation_serial_for_seat(&seat_id);

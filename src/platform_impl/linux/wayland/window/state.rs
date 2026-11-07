@@ -17,6 +17,7 @@ use sctk::reexports::csd_frame::{
     DecorationsFrame, FrameAction, FrameClick, ResizeEdge, WindowState as XdgWindowState,
 };
 use sctk::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::WpFractionalScaleV1;
+use sctk::reexports::protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::ZwpTabletToolV2;
 use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
@@ -41,7 +42,7 @@ use crate::platform_impl::{PlatformCustomCursor, WindowId};
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
 use crate::platform_impl::wayland::seat::{
-    PointerConstraintsState, WinitPointerData, WinitPointerDataExt, ZwpTextInputV3Ext,
+    PointerConstraintsState, TabletCursor, WinitPointerData, WinitPointerDataExt, ZwpTextInputV3Ext,
 };
 use crate::platform_impl::wayland::state::{WindowCompositorUpdate, WinitState};
 
@@ -107,6 +108,9 @@ pub struct WindowState {
 
     /// The pointers observed on the window.
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
+
+    /// The tablet tools in proximity of the window.
+    tablet_tools: Vec<TabletCursor>,
 
     activation_serial: ActivationSerial<WlSeat>,
     selected_cursor: SelectedCursor,
@@ -263,6 +267,7 @@ impl WindowState {
             resize_increments: None,
             pointer_constraints,
             pointers: Default::default(),
+            tablet_tools: Vec::new(),
             activation_serial: ActivationSerial::default(),
             queue_handle: queue_handle.clone(),
             resizable: true,
@@ -873,7 +878,26 @@ impl WindowState {
             if pointer.set_cursor(&self.connection, cursor_icon).is_err() {
                 warn!("Failed to set cursor to {:?}", cursor_icon);
             }
-        })
+        });
+        for tool in &self.tablet_tools {
+            tool.set_icon(cursor_icon);
+        }
+    }
+
+    /// A tablet tool came over the window; it shows the window's cursor.
+    pub fn tablet_tool_entered(&mut self, tool: TabletCursor) {
+        if !self.cursor_visible {
+            tool.hide();
+        } else if let SelectedCursor::Named(icon) = &self.selected_cursor {
+            tool.set_icon(*icon);
+        }
+        self.tablet_tools.retain(|known| known.tool != tool.tool);
+        self.tablet_tools.push(tool);
+    }
+
+    /// A tablet tool left the window.
+    pub fn tablet_tool_left(&mut self, tool: &ZwpTabletToolV2) {
+        self.tablet_tools.retain(|known| &known.tool != tool);
     }
 
     /// Set the custom cursor icon.
@@ -1118,6 +1142,9 @@ impl WindowState {
                 {
                     pointer.pointer().set_cursor(latest_enter_serial, None, 0, 0);
                 }
+            }
+            for tool in &self.tablet_tools {
+                tool.hide();
             }
         }
     }
@@ -1458,7 +1485,12 @@ mod frame_pacing_tests {
     const HZ_144: Option<u32> = Some(143_999);
     const HZ_60: Option<u32> = Some(59_950);
 
-    fn feed(pacing: &mut FramePacing, intervals_ms: &[u32], redraw_pending: bool, refresh: Option<u32>) {
+    fn feed(
+        pacing: &mut FramePacing,
+        intervals_ms: &[u32],
+        redraw_pending: bool,
+        refresh: Option<u32>,
+    ) {
         let mut time = pacing.last_done_ms.unwrap_or_else(|| {
             pacing.frame_done(1_000, redraw_pending, refresh);
             1_000

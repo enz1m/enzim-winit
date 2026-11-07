@@ -391,6 +391,19 @@ pub enum WindowEvent {
     /// [`transform`]: https://developer.mozilla.org/en-US/docs/Web/CSS/transform
     Touch(Touch),
 
+    /// A drawing tablet tool (pen, eraser, airbrush) came near, touched, moved
+    /// over or left the window (enzWinit).
+    ///
+    /// The tool also drives the pointer: proximity enters and leaves the
+    /// window, contact presses the left button, the stylus buttons press the
+    /// middle and right buttons, so widgets that only read the mouse work with
+    /// a pen. Each pointer event follows the tablet event it comes from.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - Only available on **Wayland** (`zwp_tablet_v2`).
+    TabletTool(TabletToolEvent),
+
     /// The window's scale factor has changed.
     ///
     /// The following user actions can cause DPI changes:
@@ -910,6 +923,73 @@ pub struct Touch {
     pub force: Option<Force>,
     /// Unique identifier of a finger.
     pub id: u64,
+}
+
+/// One frame of a drawing tablet tool's state (enzWinit); see
+/// [`WindowEvent::TabletTool`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TabletToolEvent {
+    pub device_id: DeviceId,
+    /// Which tool this is.
+    pub tool: TabletTool,
+    /// What happened in this frame.
+    pub phase: TabletToolPhase,
+    /// The tool's tip over the window.
+    pub position: PhysicalPosition<f64>,
+    /// How hard the tip presses, from `0.0` to `1.0`; `0.0` while hovering.
+    pub pressure: f64,
+    /// How far the tool is above the surface, from `0.0` (touching) to `1.0`
+    /// (the edge of proximity); `0.0` when the tablet cannot tell.
+    pub distance: f64,
+    /// The tool's tilt in degrees from the perpendicular, positive towards
+    /// the right (x) and towards the user (y).
+    pub tilt: (f64, f64),
+    /// The tool's rotation about its own axis in degrees, clockwise; `0.0`
+    /// for tools without one.
+    pub rotation: f64,
+}
+
+/// A tool of a drawing tablet: what kind it is and which physical one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TabletTool {
+    pub kind: TabletToolKind,
+    /// The tool's hardware serial number, `0` when unknown; the same pen
+    /// keeps it across tablets and sessions.
+    pub serial: u64,
+}
+
+/// The kind of a tablet tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TabletToolKind {
+    Pen,
+    /// The eraser end of a pen.
+    Eraser,
+    Brush,
+    Pencil,
+    Airbrush,
+    Finger,
+    /// A puck shaped like a mouse.
+    Mouse,
+    /// A puck with a lens and crosshair.
+    Lens,
+}
+
+/// What a tablet tool did in one [`TabletToolEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabletToolPhase {
+    /// The tool came within range over the window.
+    ProximityIn,
+    /// The tool moved, touched or not.
+    Moved,
+    /// The tip touched the surface.
+    Down,
+    /// The tip left the surface.
+    Up,
+    /// A button on the tool changed; `button` is the Linux input code
+    /// (`0x14b` `BTN_STYLUS`, `0x14c` `BTN_STYLUS2`).
+    Button { button: u32, state: ElementState },
+    /// The tool went out of range or left the window.
+    ProximityOut,
 }
 
 /// Describes the force of a touch event
