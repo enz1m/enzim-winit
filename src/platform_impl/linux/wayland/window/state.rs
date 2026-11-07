@@ -211,6 +211,11 @@ pub struct WindowState {
     /// A popup's `xdg_popup` was destroyed ahead of the event loop's cleanup.
     pub popup_destroyed: bool,
 
+    /// Where the window geometry starts on the surface: above and left of the
+    /// content by the frame winit draws, `(0, 0)` without one. Popup
+    /// positions are relative to the geometry.
+    pub geometry_origin: (i32, i32),
+
     /// The application draws the decorations when the compositor does not.
     pub app_drawn_decorations: bool,
 
@@ -259,6 +264,7 @@ impl WindowState {
             popup_configured: false,
             popup_of: None,
             popup_destroyed: false,
+            geometry_origin: (0, 0),
             app_drawn_decorations: false,
             reported_decorations: None,
             cursor_grab_mode: GrabState::new(),
@@ -872,6 +878,7 @@ impl WindowState {
         self.reload_transparency_hint();
 
         // Set the window geometry.
+        self.geometry_origin = (x, y);
         self.window.xdg_surface().set_window_geometry(
             x,
             y,

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use wayland_protocols::xdg::shell::server::xdg_popup::{self, XdgPopup};
-use wayland_protocols::xdg::shell::server::xdg_positioner::XdgPositioner;
+use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel;
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
@@ -22,6 +22,8 @@ use wayland_server::protocol::wl_region::WlRegion;
 use wayland_server::protocol::wl_seat::{self, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
+use wayland_server::protocol::wl_subcompositor::{self, WlSubcompositor};
+use wayland_server::protocol::wl_subsurface::WlSubsurface;
 use wayland_server::protocol::wl_surface::{self, WlSurface};
 use wayland_server::{
     Client, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New,
@@ -54,6 +56,12 @@ struct Server {
     serial: u32,
     /// The serial of the press sent to the toplevel.
     press: Option<u32>,
+    /// The toplevel's latest window geometry origin.
+    geometry: (i32, i32),
+    /// The toplevel's `xdg_surface`.
+    toplevel: Option<ObjectId>,
+    /// The anchor rectangle of every positioner, in creation order.
+    anchors: Vec<(i32, i32)>,
 }
 
 impl Server {
@@ -90,8 +98,23 @@ macro_rules! global {
     };
 }
 global!(WlCompositor);
-global!(WlShm);
 global!(XdgWmBase);
+global!(WlSubcompositor);
+
+impl GlobalDispatch<WlShm, ()> for Server {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<WlShm>,
+        (): &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let shm = data_init.init(resource, ());
+        shm.format(wl_shm::Format::Argb8888);
+        shm.format(wl_shm::Format::Xrgb8888);
+    }
+}
 
 impl GlobalDispatch<WlSeat, ()> for Server {
     fn bind(
@@ -129,8 +152,25 @@ macro_rules! inert {
 inert!(WlRegion, ());
 inert!(WlBuffer, ());
 inert!(XdgToplevel, ());
-inert!(XdgPositioner, ());
 inert!(WlPointer, ());
+inert!(WlSubsurface, ());
+
+/// Subsurfaces, for the titlebar winit draws without server decorations.
+impl Dispatch<WlSubcompositor, ()> for Server {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &WlSubcompositor,
+        request: wl_subcompositor::Request,
+        (): &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_subcompositor::Request::GetSubsurface { id, .. } = request {
+            data_init.init(id, ());
+        }
+    }
+}
 
 impl Dispatch<WlSeat, ()> for Server {
     fn request(
@@ -284,7 +324,14 @@ impl Dispatch<XdgSurface, WlSurface> for Server {
         data_init: &mut DataInit<'_, Self>,
     ) {
         let role = match request {
+            xdg_surface::Request::SetWindowGeometry { x, y, .. } => {
+                if state.toplevel.as_ref() == Some(&xdg_surface.id()) {
+                    state.geometry = (x, y);
+                }
+                return;
+            },
             xdg_surface::Request::GetToplevel { id } => {
+                state.toplevel = Some(xdg_surface.id());
                 Role::Toplevel(xdg_surface.clone(), data_init.init(id, ()))
             },
             xdg_surface::Request::GetPopup { id, .. } => {
@@ -297,6 +344,22 @@ impl Dispatch<XdgSurface, WlSurface> for Server {
         };
         if let Some(slot) = surface.data::<SurfaceRole>() {
             *slot.lock().unwrap() = Some(role);
+        }
+    }
+}
+
+impl Dispatch<XdgPositioner, ()> for Server {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &XdgPositioner,
+        request: xdg_positioner::Request,
+        (): &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_positioner::Request::SetAnchorRect { x, y, .. } = request {
+            state.anchors.push((x, y));
         }
     }
 }
@@ -359,7 +422,7 @@ impl ApplicationHandler for App {
 
 /// Runs `script` on the toplevel's press and returns what the compositor saw
 /// and the press serial.
-fn run(name: &str, script: Script) -> (Vec<Seen>, u32) {
+fn run(name: &str, script: Script) -> (Vec<Seen>, u32, (i32, i32), Vec<(i32, i32)>) {
     let directory =
         std::env::temp_dir().join(format!("winit-popup-grab-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -379,6 +442,7 @@ fn run(name: &str, script: Script) -> (Vec<Seen>, u32) {
             handle.create_global::<Server, WlShm, ()>(1, ());
             handle.create_global::<Server, XdgWmBase, ()>(3, ());
             handle.create_global::<Server, WlSeat, ()>(7, ());
+            handle.create_global::<Server, WlSubcompositor, ()>(1, ());
             while !stop.load(Ordering::SeqCst) {
                 if let Ok(Some(stream)) = socket.accept() {
                     handle.insert_client(stream, Arc::new(NoData)).unwrap();
@@ -406,13 +470,18 @@ fn run(name: &str, script: Script) -> (Vec<Seen>, u32) {
     let _ = std::fs::remove_dir_all(&directory);
 
     let server = server.lock().unwrap();
-    (server.seen.clone(), server.press.expect("the press was sent"))
+    (
+        server.seen.clone(),
+        server.press.expect("the press was sent"),
+        server.geometry,
+        server.anchors.clone(),
+    )
 }
 
 /// One event loop per process: every case runs in this one sequence.
 #[test]
 fn popups_grab_only_on_top_after_a_recent_press_and_replace_in_order() {
-    let (seen, press) = run("replace", |event_loop, parent| {
+    let (seen, press, geometry, anchors) = run("replace", |event_loop, parent| {
         // A menu opened by the press grabs.
         let menu = event_loop.create_window(popup(parent, true)).unwrap();
         // A second grabbing popup beside it would not be topmost: no grab.
@@ -433,7 +502,8 @@ fn popups_grab_only_on_top_after_a_recent_press_and_replace_in_order() {
     let position = |entry: &Seen| {
         seen.iter().position(|seen| seen == entry).unwrap_or_else(|| panic!("{entry:?}: {seen:?}"))
     };
-    let grabbed = |index: usize| seen.iter().any(|seen| matches!(seen, Seen::Grab(i, _) if *i == index));
+    let grabbed =
+        |index: usize| seen.iter().any(|seen| matches!(seen, Seen::Grab(i, _) if *i == index));
     assert!(seen.contains(&Seen::Grab(0, press)), "the menu grabs: {seen:?}");
     assert!(!grabbed(1), "no grab beside a grabbing popup: {seen:?}");
     assert!(position(&Seen::Destroy(1)) < position(&Seen::GetPopup(2)), "{seen:?}");
@@ -443,6 +513,10 @@ fn popups_grab_only_on_top_after_a_recent_press_and_replace_in_order() {
     assert!(!grabbed(3), "a tooltip does not grab: {seen:?}");
     assert!(seen.contains(&Seen::GetPopup(4)), "{seen:?}");
     assert!(!grabbed(4), "a stale press opens no grab: {seen:?}");
+    // Positioner coordinates are the parent's window geometry, which starts
+    // at the frame winit draws: the surface anchor (10, 10) moves by it.
+    assert!(geometry.1 < 0, "winit draws a titlebar here: {geometry:?}");
+    assert_eq!(anchors[0], (10 - geometry.0, 10 - geometry.1), "{anchors:?}");
     for index in 0..4 {
         let destroys = seen.iter().filter(|seen| **seen == Seen::Destroy(index)).count();
         assert_eq!(destroys, 1, "popup {index} is destroyed once: {seen:?}");

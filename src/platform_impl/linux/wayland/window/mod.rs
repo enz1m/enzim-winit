@@ -152,13 +152,19 @@ impl Window {
                     let parent = parent.lock().unwrap();
                     let grab =
                         (popup.grab && !sibling_grabs).then(|| parent_serial(&parent)).flatten();
-                    (parent.window.xdg_surface().clone(), grab)
+                    (parent.window.xdg_surface().clone(), grab, parent.geometry_origin)
                 });
-                let Some((parent, grab)) = parent else {
+                let Some((parent, grab, origin)) = parent else {
                     return Err(os_error!(OsError::Misc(
                         "the popup's parent window does not exist"
                     )));
                 };
+                // The anchor is in surface coordinates; the positioner's are
+                // the parent's window geometry, which starts at the frame
+                // winit draws (its titlebar) when there is one.
+                let mut popup = popup;
+                popup.anchor_rect.0 -= origin.0;
+                popup.anchor_rect.1 -= origin.1;
                 let positioner = positioner(&state.xdg_shell, &popup)
                     .map_err(|_| os_error!(OsError::Misc("the compositor has no xdg_wm_base")))?;
                 let popup = Popup::from_surface(
