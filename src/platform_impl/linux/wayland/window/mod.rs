@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use sctk::reexports::client::protocol::wl_display::WlDisplay;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
@@ -32,12 +33,14 @@ use crate::window::{
 use super::event_loop::sink::EventSink;
 use super::output::MonitorHandle;
 use super::state::WinitState;
-use super::types::xdg_activation::XdgActivationTokenData;
+use super::types::xdg_activation::{PendingActivationRequests, XdgActivationTokenData};
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
 pub(crate) mod state;
 
 pub use state::WindowState;
+
+const ACTIVATION_SERIAL_LIFETIME: Duration = Duration::from_secs(1);
 
 /// The Wayland window.
 pub struct Window {
@@ -62,6 +65,8 @@ pub struct Window {
 
     /// The state of the requested attention from the `xdg_activation`.
     attention_requested: Arc<AtomicBool>,
+
+    activation_requests: Arc<PendingActivationRequests>,
 
     /// Handle to the main queue to perform requests.
     queue_handle: QueueHandle<WinitState>,
@@ -227,6 +232,7 @@ impl Window {
             queue_handle,
             xdg_activation,
             attention_requested: Arc::new(AtomicBool::new(false)),
+            activation_requests: Arc::new(PendingActivationRequests::default()),
             event_loop_awakener,
             window_requests,
             window_events_sink,
@@ -552,12 +558,49 @@ impl Window {
 
         let serial = AsyncRequestSerial::get();
 
-        let data = XdgActivationTokenData::Obtain((self.window_id, serial));
+        let data = XdgActivationTokenData::Obtain {
+            window_id: self.window_id,
+            serial,
+            pending: Arc::downgrade(&self.activation_requests),
+        };
         let xdg_activation_token = xdg_activation.get_activation_token(&self.queue_handle, data);
-        xdg_activation_token.set_surface(self.surface());
-        xdg_activation_token.commit();
+        let admission =
+            self.activation_requests.lock().unwrap().insert(serial, xdg_activation_token.clone());
+        if let Err(request) = admission {
+            request.destroy();
+            return Err(NotSupportedError::new());
+        }
+
+        {
+            // Keep seat removal ordered with serial attachment through commit.
+            let mut window_state = self.window_state.lock().unwrap();
+            xdg_activation_token.set_surface(self.surface());
+            if let Some((input_serial, seat)) =
+                window_state.take_activation_serial(ACTIVATION_SERIAL_LIFETIME)
+            {
+                xdg_activation_token.set_serial(input_serial, &seat);
+            }
+            xdg_activation_token.commit();
+        }
 
         Ok(serial)
+    }
+
+    pub fn cancel_activation_token_request(&self, serial: AsyncRequestSerial) -> bool {
+        let Some(request) = self.activation_requests.lock().unwrap().cancel(&serial) else {
+            return false;
+        };
+        request.destroy();
+        true
+    }
+
+    pub fn activate_with_token(
+        &self,
+        token: crate::window::ActivationToken,
+    ) -> Result<(), NotSupportedError> {
+        let xdg_activation = self.xdg_activation.as_ref().ok_or_else(NotSupportedError::new)?;
+        xdg_activation.activate(token.into_raw(), self.surface());
+        Ok(())
     }
 
     #[inline]
@@ -745,6 +788,10 @@ impl Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
+        let requests = self.activation_requests.lock().unwrap().take_all();
+        for request in requests {
+            request.destroy();
+        }
         self.window_requests.closed.store(true, Ordering::Relaxed);
         self.event_loop_awakener.ping();
     }

@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! Touch handling.
 
 use tracing::warn;
@@ -21,15 +22,15 @@ impl TouchHandler for WinitState {
         _: &Connection,
         _: &QueueHandle<Self>,
         touch: &WlTouch,
-        _: u32,
+        serial: u32,
         _: u32,
         surface: WlSurface,
         id: i32,
         position: (f64, f64),
     ) {
         let window_id = wayland::make_wid(&surface);
-        let scale_factor = match self.windows.get_mut().get(&window_id) {
-            Some(window) => window.lock().unwrap().scale_factor(),
+        let window = match self.windows.get_mut().get(&window_id) {
+            Some(window) => window,
             None => return,
         };
 
@@ -41,7 +42,12 @@ impl TouchHandler for WinitState {
             },
         };
 
-        // Update the state of the point.
+        let scale_factor = {
+            let mut window = window.lock().unwrap();
+            window.record_activation_serial(serial, touch.seat().clone());
+            window.scale_factor()
+        };
+
         let location = LogicalPosition::<f64>::from(position);
         seat_state.touch_map.insert(id, TouchPoint { surface, location });
 

@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The [`Window`] struct and associated types.
 use std::fmt;
 
@@ -1841,7 +1842,7 @@ pub enum ImePurpose {
 /// An opaque token used to activate the [`Window`].
 ///
 /// [`Window`]: crate::window::Window
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct ActivationToken {
     pub(crate) token: String,
 }
@@ -1872,5 +1873,24 @@ impl ActivationToken {
     /// Convert the token to its string representation to later pass via IPC.
     pub fn into_raw(self) -> String {
         self.token
+    }
+}
+
+impl std::fmt::Debug for ActivationToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ActivationToken([redacted])")
+    }
+}
+
+#[cfg(test)]
+mod activation_token_tests {
+    use super::ActivationToken;
+
+    #[test]
+    fn debug_redacts_the_native_token() {
+        let marker = "native-token-marker";
+        let shown = format!("{:?}", ActivationToken::from_raw(marker.into()));
+        assert_eq!(shown, "ActivationToken([redacted])");
+        assert!(!shown.contains(marker));
     }
 }

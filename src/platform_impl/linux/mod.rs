@@ -390,6 +390,19 @@ impl Window {
     }
 
     #[inline]
+    pub(crate) fn cancel_activation_token_request(&self, serial: AsyncRequestSerial) -> bool {
+        x11_or_wayland!(match self; Window(w) => w.cancel_activation_token_request(serial))
+    }
+
+    #[inline]
+    pub(crate) fn activate_with_token(
+        &self,
+        token: ActivationToken,
+    ) -> Result<(), NotSupportedError> {
+        x11_or_wayland!(match self; Window(w) => w.activate_with_token(token))
+    }
+
+    #[inline]
     pub fn set_min_inner_size(&self, dimensions: Option<Size>) {
         x11_or_wayland!(match self; Window(w) => w.set_min_inner_size(dimensions))
     }

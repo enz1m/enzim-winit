@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! Seat handling.
 
 use std::sync::Arc;
@@ -214,8 +215,12 @@ impl SeatHandler for WinitState {
         _queue_handle: &QueueHandle<Self>,
         seat: WlSeat,
     ) {
-        let _ = self.seats.remove(&seat.id());
-        self.on_keyboard_destroy(&seat.id());
+        let seat_id = seat.id();
+        let _ = self.seats.remove(&seat_id);
+        for window in self.windows.get_mut().values_mut() {
+            window.lock().unwrap().invalidate_activation_serial_for_seat(&seat_id);
+        }
+        self.on_keyboard_destroy(&seat_id);
     }
 }
 

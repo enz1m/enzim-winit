@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The keyboard input handling.
 
 use std::sync::Mutex;
@@ -131,8 +132,16 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     state.events_sink.push_window_event(WindowEvent::Focused(false), window_id);
                 }
             },
-            WlKeyboardEvent::Key { key, state: WEnum::Value(WlKeyState::Pressed), .. } => {
+            WlKeyboardEvent::Key {
+                key, serial, state: WEnum::Value(WlKeyState::Pressed), ..
+            } => {
                 let key = key + 8;
+
+                if let Some(window_id) = *data.window_id.lock().unwrap() {
+                    if let Some(window) = state.windows.get_mut().get_mut(&window_id) {
+                        window.lock().unwrap().record_activation_serial(serial, data.seat.clone());
+                    }
+                }
 
                 key_input(
                     keyboard_state,

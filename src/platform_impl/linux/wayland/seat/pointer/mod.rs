@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 //! The pointer events.
 
 use std::ops::Deref;
@@ -76,6 +77,10 @@ impl PointerHandler for WinitState {
             let scale_factor = window.scale_factor();
             let position: PhysicalPosition<f64> =
                 LogicalPosition::new(event.position.0, event.position.1).to_physical(scale_factor);
+
+            if let PointerEventKind::Press { serial, .. } = &event.kind {
+                window.record_activation_serial(*serial, seat.clone());
+            }
 
             match event.kind {
                 // Pointer movements on decorations.

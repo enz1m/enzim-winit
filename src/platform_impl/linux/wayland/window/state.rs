@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ahash::HashSet;
 use tracing::{info, warn};
@@ -56,6 +56,35 @@ const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
 /// Mints one identity per `wl_surface` this backend creates.
 static NEXT_SURFACE_INCARNATION: AtomicU64 = AtomicU64::new(1);
 
+struct ActivationSerial<T> {
+    pending: Option<(u32, T, Instant)>,
+}
+
+impl<T> Default for ActivationSerial<T> {
+    fn default() -> Self {
+        Self { pending: None }
+    }
+}
+
+impl<T: Clone> ActivationSerial<T> {
+    fn record(&mut self, serial: u32, seat: T, recorded_at: Instant) {
+        self.pending = Some((serial, seat, recorded_at));
+    }
+
+    fn take(&mut self, max_age: Duration, now: Instant) -> Option<(u32, T)> {
+        let (serial, seat, recorded_at) = self.pending.take()?;
+        now.checked_duration_since(recorded_at)
+            .is_some_and(|age| age <= max_age)
+            .then_some((serial, seat))
+    }
+
+    fn invalidate_if(&mut self, predicate: impl FnOnce(&T) -> bool) {
+        if self.pending.as_ref().is_some_and(|(_, seat, _)| predicate(seat)) {
+            self.pending = None;
+        }
+    }
+}
+
 /// The state of the window which is being updated from the [`WinitState`].
 pub struct WindowState {
     /// The connection to Wayland server.
@@ -79,6 +108,7 @@ pub struct WindowState {
     /// The pointers observed on the window.
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
 
+    activation_serial: ActivationSerial<WlSeat>,
     selected_cursor: SelectedCursor,
 
     /// Whether the cursor is visible.
@@ -217,6 +247,7 @@ impl WindowState {
             resize_increments: None,
             pointer_constraints,
             pointers: Default::default(),
+            activation_serial: ActivationSerial::default(),
             queue_handle: queue_handle.clone(),
             resizable: true,
             scale_factor: 1.,
@@ -620,6 +651,18 @@ impl WindowState {
             .as_ref()
             .map(|frame| frame.add_borders(self.size.width, self.size.height).into())
             .unwrap_or(self.size)
+    }
+
+    pub fn record_activation_serial(&mut self, serial: u32, seat: WlSeat) {
+        self.activation_serial.record(serial, seat, Instant::now());
+    }
+
+    pub fn take_activation_serial(&mut self, max_age: Duration) -> Option<(u32, WlSeat)> {
+        self.activation_serial.take(max_age, Instant::now())
+    }
+
+    pub fn invalidate_activation_serial_for_seat(&mut self, seat: &ObjectId) {
+        self.activation_serial.invalidate_if(|candidate| candidate.id() == seat.clone());
     }
 
     /// Register pointer on the top-level.
@@ -1233,6 +1276,34 @@ impl From<ResizeDirection> for XdgResizeEdge {
             ResizeDirection::SouthEast => XdgResizeEdge::BottomRight,
             ResizeDirection::South => XdgResizeEdge::Bottom,
         }
+    }
+}
+
+#[cfg(test)]
+mod activation_native_tests {
+    use super::ActivationSerial;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn interaction_serial_is_latest_generation_one_shot_and_expiring() {
+        let now = Instant::now();
+        let mut serial = ActivationSerial::default();
+        assert!(serial.take(Duration::from_secs(1), now).is_none());
+
+        serial.record(7, "old-seat", now);
+        serial.record(9, "current-seat", now);
+        assert_eq!(serial.take(Duration::from_secs(1), now), Some((9, "current-seat")));
+        assert!(serial.take(Duration::from_secs(1), now).is_none());
+
+        serial.record(11, "stale-seat", now);
+        assert!(serial.take(Duration::from_millis(5), now + Duration::from_millis(6)).is_none());
+
+        serial.record(13, "removed-seat", now);
+        serial.invalidate_if(|seat| *seat == "other-seat");
+        assert_eq!(serial.take(Duration::from_secs(1), now), Some((13, "removed-seat")));
+        serial.record(15, "removed-seat", now);
+        serial.invalidate_if(|seat| *seat == "removed-seat");
+        assert!(serial.take(Duration::from_secs(1), now).is_none());
     }
 }
 

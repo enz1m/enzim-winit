@@ -1,3 +1,4 @@
+// Modified by enzUI contributors. See FORK.md.
 use std::ffi::CString;
 use std::mem::replace;
 use std::os::raw::*;
@@ -1833,6 +1834,19 @@ impl UnownedWindow {
             .send((self.id(), serial))
             .expect("activation token channel should never be closed");
         Ok(serial)
+    }
+
+    #[inline]
+    pub fn cancel_activation_token_request(&self, _serial: AsyncRequestSerial) -> bool {
+        false
+    }
+
+    #[inline]
+    pub fn activate_with_token(
+        &self,
+        _token: crate::window::ActivationToken,
+    ) -> Result<(), NotSupportedError> {
+        Err(NotSupportedError::new())
     }
 
     #[inline]
