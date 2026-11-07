@@ -37,6 +37,7 @@ use super::output::MonitorHandle;
 use super::state::WinitState;
 use super::types::xdg_activation::{PendingActivationRequests, XdgActivationTokenData};
 use super::types::xdg_dialog::Dialog;
+use super::types::xdg_toplevel_icon::ToplevelIconManager;
 use super::types::xdg_toplevel_tag::ToplevelTagManager;
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
@@ -71,6 +72,9 @@ pub struct Window {
     /// Xdg activation to request user attention.
     xdg_activation: Option<XdgActivationV1>,
     toplevel_tag_manager: Option<ToplevelTagManager>,
+
+    /// Window icons, when the compositor offers them.
+    toplevel_icon_manager: Option<ToplevelIconManager>,
 
     /// The state of the requested attention from the `xdg_activation`.
     attention_requested: Arc<AtomicBool>,
@@ -109,6 +113,7 @@ impl Window {
             state.xdg_activation.as_ref().map(|activation_state| activation_state.global().clone());
         let display = event_loop_window_target.connection.display();
         let toplevel_tag_manager = state.toplevel_tag_manager.clone();
+        let toplevel_icon_manager = state.toplevel_icon_manager.clone();
 
         let size: Size = attributes.inner_size.unwrap_or(LogicalSize::new(800., 600.).into());
 
@@ -237,6 +242,12 @@ impl Window {
             Cursor::Custom(cursor) => window_state.set_custom_cursor(cursor),
         }
 
+        if let (Some(manager), Some(icon), Some(toplevel)) =
+            (&toplevel_icon_manager, &attributes.window_icon, window.xdg_toplevel())
+        {
+            window_state.set_icon(manager, toplevel, Some(&icon.inner));
+        }
+
         // Apply resize increments.
         if let Some(increments) = attributes.resize_increments {
             let increments = increments.to_logical(window_state.scale_factor());
@@ -298,6 +309,7 @@ impl Window {
             queue_handle,
             xdg_activation,
             toplevel_tag_manager,
+            toplevel_icon_manager,
             attention_requested: Arc::new(AtomicBool::new(false)),
             activation_requests: Arc::new(PendingActivationRequests::default()),
             event_loop_awakener,
@@ -504,7 +516,15 @@ impl Window {
     pub fn set_window_level(&self, _level: WindowLevel) {}
 
     #[inline]
-    pub(crate) fn set_window_icon(&self, _window_icon: Option<PlatformIcon>) {}
+    pub(crate) fn set_window_icon(&self, window_icon: Option<PlatformIcon>) {
+        let (Some(manager), Some(toplevel)) =
+            (&self.toplevel_icon_manager, self.window.xdg_toplevel())
+        else {
+            return;
+        };
+        self.window_state.lock().unwrap().set_icon(manager, toplevel, window_icon.as_ref());
+        self.event_loop_awakener.ping();
+    }
 
     #[inline]
     pub fn set_minimized(&self, minimized: bool) {
@@ -770,11 +790,13 @@ impl Window {
     /// window lives.
     pub(crate) fn wayland_parent_objects(&self) -> (Connection, WlSurface, u64) {
         let state = self.window_state.lock().unwrap();
-        (
-            state.connection.clone(),
-            self.window.wl_surface().clone(),
-            state.surface_incarnation(),
-        )
+        (state.connection.clone(), self.window.wl_surface().clone(), state.surface_incarnation())
+    }
+
+    pub(crate) fn wayland_toplevel(
+        &self,
+    ) -> Option<sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel> {
+        self.window.xdg_toplevel().cloned()
     }
 
     pub(crate) fn set_toplevel_tag(&self, tag: &str) -> bool {

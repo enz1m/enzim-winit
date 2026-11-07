@@ -38,6 +38,7 @@ use crate::error::{ExternalError, NotSupportedError};
 use crate::platform_impl::wayland::logical_to_physical_rounded;
 use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
+use crate::platform_impl::wayland::types::xdg_toplevel_icon::ToplevelIconManager;
 use crate::platform_impl::{PlatformCustomCursor, WindowId};
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
@@ -102,6 +103,9 @@ pub struct WindowState {
 
     // A shared pool where to allocate custom cursors.
     custom_cursor_pool: Arc<Mutex<SlotPool>>,
+
+    /// The pixels of the window icon, kept while it is shown.
+    icon_buffer: Option<sctk::shm::slot::Buffer>,
 
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
@@ -273,6 +277,7 @@ impl WindowState {
             resizable: true,
             scale_factor: 1.,
             custom_cursor_pool: winit_state.custom_cursor_pool.clone(),
+            icon_buffer: None,
             size: initial_size.to_logical(1.),
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
@@ -898,6 +903,17 @@ impl WindowState {
     /// A tablet tool left the window.
     pub fn tablet_tool_left(&mut self, tool: &ZwpTabletToolV2) {
         self.tablet_tools.retain(|known| &known.tool != tool);
+    }
+
+    /// Shows `icon` as the window's icon, or the compositor's default.
+    pub(crate) fn set_icon(
+        &mut self,
+        manager: &ToplevelIconManager,
+        toplevel: &sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel,
+        icon: Option<&crate::icon::RgbaIcon>,
+    ) {
+        let mut pool = self.custom_cursor_pool.lock().unwrap();
+        self.icon_buffer = manager.set(toplevel, icon, &mut pool);
     }
 
     /// Set the custom cursor icon.

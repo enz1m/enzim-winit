@@ -341,6 +341,17 @@ impl Window {
     }
 
     #[cfg(wayland_platform)]
+    pub(crate) fn wayland_toplevel(
+        &self,
+    ) -> Option<sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel> {
+        match self {
+            #[cfg(x11_platform)]
+            Window::X(_) => None,
+            Window::Wayland(window) => window.wayland_toplevel(),
+        }
+    }
+
+    #[cfg(wayland_platform)]
     pub(crate) fn set_toplevel_tag(&self, tag: &str) -> bool {
         match self {
             #[cfg(x11_platform)]

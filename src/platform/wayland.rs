@@ -83,19 +83,11 @@ impl<T> EventLoopBuilderExtWayland for EventLoopBuilder<T> {
 /// The identity is minted where the surface is created, so it names one
 /// protocol object and cannot be satisfied by a later surface that reuses the
 /// same numeric object id.
-pub type WaylandParentObjects = (
-    crate::platform_impl::wayland::Connection,
-    crate::platform_impl::wayland::WlSurface,
-    u64,
-);
+pub type WaylandParentObjects =
+    (crate::platform_impl::wayland::Connection, crate::platform_impl::wayland::WlSurface, u64);
 
 /// Additional methods on [`Window`] that are specific to Wayland.
-///
-/// [`Window`]: crate::window::Window
 pub trait WindowExtWayland {
-    /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
-    fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
-
     /// Queues an opaque `xdg_toplevel_tag` on this window's own toplevel.
     ///
     /// Returns false for X11, an unavailable protocol, or tags outside 1–128
@@ -112,13 +104,70 @@ pub trait WindowExtWayland {
     /// their owner: destroying it destroys the surface, and this method is the
     /// only way to reach them, so no caller can outlive that.
     fn wayland_parent_objects(&self) -> Option<WaylandParentObjects>;
+
+    /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
+    fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
+
+    /// The window's own `xdg_toplevel` proxy, cloned, for protocols that name
+    /// the window (such as `xdg_toplevel_drag_v1`); `None` for a window that is
+    /// not a Wayland toplevel.
+    fn wayland_toplevel(&self) -> Option<WaylandToplevel>;
+
+    /// The id to restore the window session with next launch (enzWinit), once
+    /// the compositor has created or restored it; see
+    /// [`WindowAttributesExtWayland::with_session`]. Store it with the app's
+    /// state; `None` without a session.
+    fn wayland_session_id(&self) -> Option<String>;
+
+    /// Cast `shadow` around the window, or none (enzWinit). See
+    /// [`WindowShadow`]. Ignored on X11 and for popups.
+    fn set_window_shadow(&self, shadow: Option<WindowShadow>);
 }
 
-impl WindowExtWayland for Window {
-    fn set_toplevel_tag(&self, tag: &str) -> bool {
-        self.window.set_toplevel_tag(tag)
-    }
+/// A drop shadow winit paints around a window whose application draws its
+/// own frame (enzWinit).
+///
+/// The shadow is painted on subsurfaces below the window, outside its window
+/// geometry: the compositor's idea of the window (snapping, tiling, an
+/// active-window border or highlight) stays the application's surface, and
+/// the shadow is not part of it. A thin band of it next to each edge takes
+/// pointer presses as resize grips; the rest lets input through. It is left
+/// out on edges the window is tiled against and entirely while maximized or
+/// fullscreen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowShadow {
+    /// The window's corner radius in logical pixels, which the shadow
+    /// follows.
+    pub corner_radius: f32,
+    /// The layers while the window is active, drawn first to last.
+    pub active: Vec<ShadowLayer>,
+    /// The layers while another window is active.
+    pub inactive: Vec<ShadowLayer>,
+    /// How far past each edge, in logical pixels, a press resizes the
+    /// window; capped by the shadow's own width on that side.
+    pub resize_border: f32,
+}
 
+/// One layer of a [`WindowShadow`], with CSS `box-shadow` meaning: the
+/// window's rounded outline moved by `offset`, grown by `spread` and blurred
+/// by `blur`, all in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShadowLayer {
+    /// Straight (not premultiplied) sRGB red, green, blue and alpha, 0 to 1.
+    pub color: [f32; 4],
+    /// Horizontal and vertical offset.
+    pub offset: (f32, f32),
+    /// Blur radius; the edge fades over about this distance.
+    pub blur: f32,
+    /// How far the outline grows before blurring.
+    pub spread: f32,
+}
+
+/// A window's `xdg_toplevel` proxy on its own connection.
+pub type WaylandToplevel =
+    sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
+
+impl WindowExtWayland for Window {
     #[inline]
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
         #[allow(clippy::single_match)]
@@ -130,8 +179,28 @@ impl WindowExtWayland for Window {
         }
     }
 
+    fn set_toplevel_tag(&self, tag: &str) -> bool {
+        self.window.set_toplevel_tag(tag)
+    }
+
+    #[inline]
     fn wayland_parent_objects(&self) -> Option<WaylandParentObjects> {
         self.window.wayland_parent_objects()
+    }
+
+    #[inline]
+    fn wayland_toplevel(&self) -> Option<WaylandToplevel> {
+        self.window.wayland_toplevel()
+    }
+
+    #[inline]
+    fn set_window_shadow(&self, shadow: Option<WindowShadow>) {
+        self.window.set_window_shadow(shadow)
+    }
+
+    #[inline]
+    fn wayland_session_id(&self) -> Option<String> {
+        self.window.wayland_session_id()
     }
 }
 
@@ -173,6 +242,19 @@ pub trait WindowAttributesExtWayland {
     /// says which happened. On X11, where nothing is negotiated, the window
     /// gets no window-manager decorations.
     fn with_app_drawn_decorations(self, app_drawn: bool) -> Self;
+
+    /// Restore this window's placement from an earlier run (enzWinit), where
+    /// the compositor offers `xdg_session_manager_v1`. `session_id` is the id
+    /// [`WindowExtWayland::wayland_session_id`] reported last time (`None`
+    /// starts a session); `toplevel` names this window in the session and
+    /// must be unique among the open windows, such as `"main"` or
+    /// `"document-3"`. One session serves the whole process: the first window
+    /// that names one opens it.
+    fn with_session(self, session_id: Option<String>, toplevel: impl Into<String>) -> Self;
+
+    /// Cast `shadow` from the first frame (enzWinit); see
+    /// [`WindowExtWayland::set_window_shadow`].
+    fn with_window_shadow(self, shadow: Option<WindowShadow>) -> Self;
 }
 
 impl WindowAttributesExtWayland for WindowAttributes {
@@ -196,8 +278,20 @@ impl WindowAttributesExtWayland for WindowAttributes {
     }
 
     #[inline]
+    fn with_session(mut self, session_id: Option<String>, toplevel: impl Into<String>) -> Self {
+        self.platform_specific.session = Some((session_id, toplevel.into()));
+        self
+    }
+
+    #[inline]
     fn with_transient_parent(mut self, parent: crate::window::WindowId, modal: bool) -> Self {
         self.platform_specific.transient_parent = Some((parent, modal));
+        self
+    }
+
+    #[inline]
+    fn with_window_shadow(mut self, shadow: Option<WindowShadow>) -> Self {
+        self.platform_specific.window_shadow = shadow;
         self
     }
 }
@@ -224,8 +318,10 @@ pub struct PopupAttributes {
     pub offset: (i32, i32),
     /// What the compositor may do when the popup does not fit on screen.
     pub constraint_adjustment: PopupConstraint,
-    /// Take an explicit grab with the parent's latest input serial: the popup
-    /// gets keyboard focus and is dismissed by a click anywhere else.
+    /// Take an explicit grab: the popup gets keyboard focus and is dismissed
+    /// by a click anywhere else. Taken only with a press or key on the parent
+    /// at most a second old, and not while another popup of the parent holds
+    /// a grab; a menu opened by a click grabs, a hover tooltip should not.
     pub grab: bool,
 }
 
