@@ -12,7 +12,7 @@ use sctk::reexports::client::protocol::wl_output::WlOutput;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 
-use sctk::compositor::{CompositorHandler, CompositorState};
+use sctk::compositor::{CompositorHandler, CompositorState, SurfaceData};
 use sctk::output::{OutputHandler, OutputState};
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::ThemedPointer;
@@ -377,7 +377,7 @@ impl CompositorHandler for WinitState {
         self.scale_factor_changed(surface, scale_factor as f64, true)
     }
 
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &WlSurface, _: u32) {
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &WlSurface, time: u32) {
         let window_id = super::make_wid(surface);
         let window = match self.windows.get_mut().get(&window_id) {
             Some(window) => window,
@@ -385,18 +385,24 @@ impl CompositorHandler for WinitState {
         };
 
         // In case we have a redraw requested we must indicate the wake up.
-        if self
+        let redraw_pending = self
             .window_requests
             .get_mut()
             .get(&window_id)
             .unwrap()
             .redraw_requested
-            .load(Ordering::Relaxed)
-        {
+            .load(Ordering::Relaxed);
+        if redraw_pending {
             self.dispatched_events = true;
         }
 
-        window.lock().unwrap().frame_callback_received();
+        let refresh_millihertz = surface
+            .data::<SurfaceData<()>>()
+            .into_iter()
+            .flat_map(SurfaceData::<()>::outputs)
+            .filter_map(|output| MonitorHandle::new(output).refresh_rate_millihertz())
+            .max();
+        window.lock().unwrap().frame_callback_received(time, redraw_pending, refresh_millihertz);
     }
 }
 

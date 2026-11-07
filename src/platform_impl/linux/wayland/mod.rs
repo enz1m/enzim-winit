@@ -7,7 +7,7 @@ use std::sync::Arc;
 use sctk::reexports::client::globals::{BindError, GlobalError};
 pub(crate) use sctk::reexports::client::Connection;
 pub(crate) use sctk::reexports::client::protocol::wl_surface::WlSurface;
-use sctk::reexports::client::{self, ConnectError, DispatchError, Proxy};
+use sctk::reexports::client::{ConnectError, DispatchError, Proxy};
 
 pub(super) use crate::cursor::OnlyCursorImage as CustomCursor;
 use crate::dpi::{LogicalSize, PhysicalSize};

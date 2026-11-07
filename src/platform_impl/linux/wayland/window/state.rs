@@ -178,8 +178,11 @@ pub struct WindowState {
     /// configure.
     initial_size: Option<Size>,
 
-    /// The state of the frame callback.
-    frame_callback_state: FrameCallbackState,
+    /// Frame callbacks requested from the compositor and not yet done.
+    frame_callbacks_in_flight: u8,
+
+    /// Chooses how many frame callbacks may be in flight before redraws are throttled.
+    frame_pacing: FramePacing,
 
     viewport: Option<WpViewport>,
     fractional_scale: Option<WpFractionalScaleV1>,
@@ -236,7 +239,8 @@ impl WindowState {
             decorate: true,
             fractional_scale,
             frame: None,
-            frame_callback_state: FrameCallbackState::None,
+            frame_callbacks_in_flight: 0,
+            frame_pacing: FramePacing::from_env(),
             seat_focus: Default::default(),
             has_pending_move: None,
             ime_allowed: false,
@@ -279,28 +283,37 @@ impl WindowState {
 
     /// Get the current state of the frame callback.
     pub fn frame_callback_state(&self) -> FrameCallbackState {
-        self.frame_callback_state
+        if self.frame_callbacks_in_flight >= self.frame_pacing.limit() {
+            FrameCallbackState::Requested
+        } else if self.frame_callbacks_in_flight == 0 {
+            FrameCallbackState::None
+        } else {
+            FrameCallbackState::Received
+        }
     }
 
-    /// The frame callback was received, but not yet sent to the user.
-    pub fn frame_callback_received(&mut self) {
-        self.frame_callback_state = FrameCallbackState::Received;
+    /// A frame callback completed at the compositor time `time_ms`.
+    pub fn frame_callback_received(
+        &mut self,
+        time_ms: u32,
+        redraw_pending: bool,
+        refresh_millihertz: Option<u32>,
+    ) {
+        self.frame_callbacks_in_flight = self.frame_callbacks_in_flight.saturating_sub(1);
+        self.frame_pacing.frame_done(time_ms, redraw_pending, refresh_millihertz);
     }
 
     /// Reset the frame callbacks state.
-    pub fn frame_callback_reset(&mut self) {
-        self.frame_callback_state = FrameCallbackState::None;
-    }
+    ///
+    /// Callbacks still in flight keep throttling until the compositor completes them.
+    pub fn frame_callback_reset(&mut self) {}
 
-    /// Request a frame callback if we don't have one for this window in flight.
+    /// Request a frame callback unless the in-flight limit is reached.
     pub fn request_frame_callback(&mut self) {
-        let surface = self.window.wl_surface();
-        match self.frame_callback_state {
-            FrameCallbackState::None | FrameCallbackState::Received => {
-                self.frame_callback_state = FrameCallbackState::Requested;
-                surface.frame(&self.queue_handle, FrameCallbackData(surface.clone()));
-            },
-            FrameCallbackState::Requested => (),
+        if self.frame_callbacks_in_flight < self.frame_pacing.limit() {
+            self.frame_callbacks_in_flight += 1;
+            let surface = self.window.wl_surface();
+            surface.frame(&self.queue_handle, FrameCallbackData(surface.clone()));
         }
     }
 
@@ -1252,6 +1265,66 @@ impl GrabState {
     }
 }
 
+/// Frame-callback pipelining for continuously redrawing windows.
+///
+/// One callback in flight renders each frame after the previous one was shown. When a
+/// continuously redrawing window keeps missing refresh cycles, a second callback lets the
+/// next frame render while the previous one waits for the compositor, giving each frame
+/// two refresh periods at the cost of one period of latency. An idle gap restores one.
+/// `WINIT_WAYLAND_FRAMES_IN_FLIGHT=1` or `2` fixes the limit instead.
+#[derive(Debug, Default)]
+struct FramePacing {
+    forced_limit: Option<u8>,
+    pipelined: bool,
+    late_frames: u8,
+    last_done_ms: Option<u32>,
+}
+
+impl FramePacing {
+    /// Consecutive late frames that enable pipelining.
+    const LATE_FRAMES: u8 = 3;
+    /// A gap without frames this long ends the continuous redraw.
+    const IDLE_MS: u32 = 100;
+
+    fn from_env() -> Self {
+        let forced_limit = std::env::var("WINIT_WAYLAND_FRAMES_IN_FLIGHT")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .map(|value| value.clamp(1, 2));
+        Self { forced_limit, ..Self::default() }
+    }
+
+    fn limit(&self) -> u8 {
+        self.forced_limit.unwrap_or(if self.pipelined { 2 } else { 1 })
+    }
+
+    fn frame_done(&mut self, time_ms: u32, redraw_pending: bool, refresh_millihertz: Option<u32>) {
+        let interval_ms = self.last_done_ms.map(|last| time_ms.wrapping_sub(last));
+        self.last_done_ms = Some(time_ms);
+        let Some(interval_ms) = interval_ms else {
+            return;
+        };
+        if interval_ms > Self::IDLE_MS {
+            self.pipelined = false;
+            self.late_frames = 0;
+            return;
+        }
+        if self.pipelined {
+            return;
+        }
+        // A frame is late when its callback came at least one and a half refresh periods after
+        // the previous one although the window already wanted to redraw.
+        let late = redraw_pending
+            && refresh_millihertz
+                .filter(|refresh| *refresh > 0)
+                .is_some_and(|refresh| u64::from(interval_ms) * u64::from(refresh) >= 1_500_000);
+        self.late_frames = if late { self.late_frames + 1 } else { 0 };
+        if self.late_frames >= Self::LATE_FRAMES {
+            self.pipelined = true;
+        }
+    }
+}
+
 /// The state of the frame callback.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameCallbackState {
@@ -1314,5 +1387,86 @@ fn into_sctk_adwaita_config(theme: Option<Theme>) -> sctk_adwaita::FrameConfig {
         Some(Theme::Light) => sctk_adwaita::FrameConfig::light(),
         Some(Theme::Dark) => sctk_adwaita::FrameConfig::dark(),
         None => sctk_adwaita::FrameConfig::auto(),
+    }
+}
+
+#[cfg(test)]
+mod frame_pacing_tests {
+    use super::FramePacing;
+
+    const HZ_144: Option<u32> = Some(143_999);
+    const HZ_60: Option<u32> = Some(59_950);
+
+    fn feed(pacing: &mut FramePacing, intervals_ms: &[u32], redraw_pending: bool, refresh: Option<u32>) {
+        let mut time = pacing.last_done_ms.unwrap_or_else(|| {
+            pacing.frame_done(1_000, redraw_pending, refresh);
+            1_000
+        });
+        for interval in intervals_ms {
+            time = time.wrapping_add(*interval);
+            pacing.frame_done(time, redraw_pending, refresh);
+        }
+    }
+
+    #[test]
+    fn repeated_missed_refreshes_while_redrawing_enable_pipelining() {
+        let mut pacing = FramePacing::default();
+        feed(&mut pacing, &[14, 21], true, HZ_144);
+        assert_eq!(pacing.limit(), 1);
+        feed(&mut pacing, &[14], true, HZ_144);
+        assert_eq!(pacing.limit(), 2);
+    }
+
+    #[test]
+    fn frames_that_fit_the_refresh_keep_one_callback() {
+        let mut pacing = FramePacing::default();
+        feed(&mut pacing, &[17, 16, 17, 17, 16, 17], true, HZ_60);
+        assert_eq!(pacing.limit(), 1);
+        // 21 ms is late at 144 Hz but not at 60 Hz.
+        feed(&mut pacing, &[21, 21, 21], true, HZ_60);
+        assert_eq!(pacing.limit(), 1);
+    }
+
+    #[test]
+    fn a_frame_on_time_resets_the_late_count() {
+        let mut pacing = FramePacing::default();
+        feed(&mut pacing, &[14, 14, 7, 14, 14], true, HZ_144);
+        assert_eq!(pacing.limit(), 1);
+    }
+
+    #[test]
+    fn slow_one_off_redraws_and_unknown_refresh_never_pipeline() {
+        let mut pacing = FramePacing::default();
+        feed(&mut pacing, &[40, 40, 40, 40], false, HZ_144);
+        assert_eq!(pacing.limit(), 1);
+        feed(&mut pacing, &[40, 40, 40, 40], true, None);
+        assert_eq!(pacing.limit(), 1);
+    }
+
+    #[test]
+    fn an_idle_gap_restores_one_callback() {
+        let mut pacing = FramePacing::default();
+        feed(&mut pacing, &[14, 14, 14], true, HZ_144);
+        assert_eq!(pacing.limit(), 2);
+        feed(&mut pacing, &[7, 7, 7], true, HZ_144);
+        assert_eq!(pacing.limit(), 2);
+        feed(&mut pacing, &[101], false, HZ_144);
+        assert_eq!(pacing.limit(), 1);
+    }
+
+    #[test]
+    fn compositor_clock_wraparound_is_a_short_interval() {
+        let mut pacing = FramePacing { last_done_ms: Some(u32::MAX - 3), ..FramePacing::default() };
+        feed(&mut pacing, &[14, 14, 14], true, HZ_144);
+        assert_eq!(pacing.limit(), 2);
+    }
+
+    #[test]
+    fn a_forced_limit_overrides_the_policy() {
+        let mut pacing = FramePacing { forced_limit: Some(1), ..FramePacing::default() };
+        feed(&mut pacing, &[14, 14, 14], true, HZ_144);
+        assert_eq!(pacing.limit(), 1);
+        let pacing = FramePacing { forced_limit: Some(2), ..FramePacing::default() };
+        assert_eq!(pacing.limit(), 2);
     }
 }
