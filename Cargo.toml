@@ -1,4 +1,5 @@
 [package]
+homepage.workspace = true
 name = "winit"
 version = "0.30.13"
 authors = [
@@ -380,7 +381,8 @@ members = ["dpi"]
 
 [workspace.package]
 rust-version = "1.70.0"
-repository = "https://github.com/rust-windowing/winit"
+repository = "https://github.com/enz1m/enzim-winit"
+homepage = "https://github.com/enz1m/enzim-winit"
 license = "Apache-2.0"
 edition = "2021"
 
