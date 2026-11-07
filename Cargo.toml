@@ -67,6 +67,7 @@ wayland = [
     "sctk",
     "ahash",
     "memmap2",
+    "wayland-scanner",
 ]
 wayland-dlopen = ["wayland-backend/dlopen"]
 wayland-csd-adwaita = ["sctk-adwaita", "sctk-adwaita/ab_glyph"]
@@ -103,6 +104,12 @@ image = { version = "0.25.0", default-features = false, features = ["png"] }
 tracing = { version = "0.1.40", default-features = false, features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 winit = { path = ".", features = ["rwh_05"] }
+
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios", target_os = "macos"))))'.dev-dependencies]
+# The in-process compositor of the Wayland session test.
+wayland-server = "0.31"
+wayland-scanner = "0.31"
+wayland-protocols = { version = "0.32.12", features = ["server", "staging"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
 softbuffer = { version = "0.4.0", default-features = false, features = [
@@ -274,6 +281,8 @@ wayland-backend = { version = "0.3.15", default-features = false, features = [
     "client_system",
 ], optional = true }
 wayland-client = { version = "0.31.15", optional = true }
+# Generates bindings for staging protocols wayland-protocols ships only as XML.
+wayland-scanner = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32.12", features = [
     "staging",
 ], optional = true }

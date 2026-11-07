@@ -7,5 +7,6 @@ pub mod wp_fractional_scaling;
 pub mod wp_viewporter;
 pub mod xdg_activation;
 pub mod xdg_dialog;
+pub mod xdg_session;
 pub mod xdg_toplevel_icon;
 pub mod xdg_toplevel_tag;

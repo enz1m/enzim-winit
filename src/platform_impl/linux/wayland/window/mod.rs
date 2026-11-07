@@ -37,6 +37,7 @@ use super::output::MonitorHandle;
 use super::state::WinitState;
 use super::types::xdg_activation::{PendingActivationRequests, XdgActivationTokenData};
 use super::types::xdg_dialog::Dialog;
+use super::types::xdg_session::ToplevelSession;
 use super::types::xdg_toplevel_icon::ToplevelIconManager;
 use super::types::xdg_toplevel_tag::ToplevelTagManager;
 use super::{ActiveEventLoop, WaylandError, WindowId};
@@ -52,6 +53,9 @@ pub struct Window {
     /// The `xdg_dialog_v1` of a transient dialog; declared first so it is
     /// destroyed before the toplevel.
     _dialog: Option<Dialog>,
+
+    /// The window's place in the session; destroyed before the toplevel.
+    toplevel_session: Option<ToplevelSession>,
 
     /// Reference to the underlying SCTK toplevel or popup.
     window: ShellSurface,
@@ -261,6 +265,18 @@ impl Window {
             xdg_activation.activate(token.token, &surface);
         }
 
+        // A session restore must precede the first commit.
+        let toplevel_session = match (
+            &attributes.platform_specific.session,
+            window.xdg_toplevel(),
+            state.session_manager.as_mut(),
+        ) {
+            (Some((session_id, name)), Some(toplevel), Some(manager)) => {
+                manager.restore(session_id.as_deref(), toplevel, name, &queue_handle)
+            },
+            _ => None,
+        };
+
         // XXX Do initial commit.
         window.commit();
 
@@ -300,6 +316,7 @@ impl Window {
 
         Ok(Self {
             _dialog: dialog,
+            toplevel_session,
             window,
             display,
             monitors,
@@ -797,6 +814,10 @@ impl Window {
         &self,
     ) -> Option<sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::XdgToplevel> {
         self.window.xdg_toplevel().cloned()
+    }
+
+    pub(crate) fn session_id(&self) -> Option<String> {
+        self.toplevel_session.as_ref()?.session().id()
     }
 
     pub(crate) fn set_toplevel_tag(&self, tag: &str) -> bool {

@@ -81,6 +81,8 @@ pub struct PlatformSpecificWindowAttributes {
     /// The application draws the decorations whenever the compositor does
     /// not; winit never draws its own frame.
     pub app_drawn_decorations: bool,
+    /// The session to restore and this window's name in it (Wayland).
+    pub session: Option<(Option<String>, String)>,
     #[cfg(x11_platform)]
     pub x11: X11WindowAttributes,
 }
@@ -108,6 +110,7 @@ impl Default for PlatformSpecificWindowAttributes {
             popup: None,
             transient_parent: None,
             app_drawn_decorations: false,
+            session: None,
             #[cfg(x11_platform)]
             x11: X11WindowAttributes {
                 visual_id: None,
@@ -348,6 +351,15 @@ impl Window {
             #[cfg(x11_platform)]
             Window::X(_) => None,
             Window::Wayland(window) => window.wayland_toplevel(),
+        }
+    }
+
+    #[cfg(wayland_platform)]
+    pub(crate) fn wayland_session_id(&self) -> Option<String> {
+        match self {
+            #[cfg(x11_platform)]
+            Window::X(_) => None,
+            Window::Wayland(window) => window.session_id(),
         }
     }
 
