@@ -26,5 +26,6 @@
 - wayland: Retain frame shadow surfaces across transitions
 - ime: Update surrounding text for input methods
 
-The base is iced-rs/winit 0.30.13 already merged into the installed fork.
-Upstream macOS formatting is retained. No new upstream upgrade is included.
+The base is iced-rs/winit 0.30.13. The upstream `v0.30.x` branch at
+`2e288202` is merged, retaining upstream history and the newer objc2 URL
+handling already present in this fork.
